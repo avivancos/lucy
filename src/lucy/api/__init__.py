@@ -1,0 +1,2 @@
+"""Lucy FastAPI application package."""
+

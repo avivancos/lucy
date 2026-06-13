@@ -1,0 +1,61 @@
+services:
+  lucy-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: uvicorn lucy.api.app:app --host 0.0.0.0 --port 8000
+    env_file: .env.example
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+
+  lucy-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: python -m lucy.worker
+    env_file: .env.example
+    depends_on:
+      - postgres
+      - redis
+
+  lucy-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_LUCY_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - lucy-api
+
+  lucy-media-gateway:
+    build:
+      context: ./media-gateway-rust
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lucy
+      POSTGRES_PASSWORD: lucy
+      POSTGRES_DB: lucy
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.104.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+
