@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
+from lucy.observe import Tracer, get_tracer
+
 
 NodeHandler = Callable[["GraphContext"], Awaitable[Any]]
 
@@ -26,6 +28,8 @@ class GraphContext:
     payload: Dict[str, Any]
     results: Dict[str, Any] = field(default_factory=dict)
     trace: List[TraceEvent] = field(default_factory=list)
+    session_id: str = ""
+    turn_id: str = ""
 
 
 @dataclass
@@ -45,11 +49,18 @@ class GraphExecutionError(RuntimeError):
 class GraphExecutor:
     """Small async graph executor for Lucy's first runtime milestone."""
 
-    def __init__(self, nodes: List[GraphNode]):
+    def __init__(self, nodes: List[GraphNode], *, tracer: Optional[Tracer] = None):
         self.nodes = nodes
+        self._tracer = tracer
 
-    async def run(self, payload: Dict[str, Any]) -> GraphContext:
-        context = GraphContext(payload=payload)
+    async def run(
+        self,
+        payload: Dict[str, Any],
+        *,
+        session_id: str = "",
+        turn_id: str = "",
+    ) -> GraphContext:
+        context = GraphContext(payload=payload, session_id=session_id, turn_id=turn_id)
         if any(node.depends_on for node in self.nodes):
             await self._run_dag(context)
             return context
@@ -130,6 +141,7 @@ class GraphExecutor:
         context.trace.sort(key=lambda event: self._node_order(event.node))
 
     async def _run_node(self, node: GraphNode, context: GraphContext) -> None:
+        node_started = time.perf_counter()
         attempts = node.retries + 1
         last_error: Optional[BaseException] = None
         for _ in range(attempts):
@@ -141,14 +153,15 @@ class GraphExecutor:
                 )
                 finished = time.perf_counter()
                 context.results[node.name] = result
-                context.trace.append(
+                self._record(
+                    context,
                     TraceEvent(
                         node=node.name,
                         status="ok",
                         started_at=started,
                         finished_at=finished,
                         latency_ms=(finished - started) * 1000,
-                    )
+                    ),
                 )
                 return
             except asyncio.CancelledError:
@@ -161,7 +174,8 @@ class GraphExecutor:
             result = await node.fallback(context)
             finished = time.perf_counter()
             context.results[node.name] = result
-            context.trace.append(
+            self._record(
+                context,
                 TraceEvent(
                     node=node.name,
                     status="fallback",
@@ -169,10 +183,63 @@ class GraphExecutor:
                     finished_at=finished,
                     latency_ms=(finished - started) * 1000,
                     error=str(last_error) if last_error else None,
-                )
+                ),
             )
             return
 
+        # No fallback and retries exhausted: the node failed hard. Emit an
+        # error span (the most important failure case to observe) before
+        # raising. This does not append a TraceEvent, preserving the existing
+        # context.trace contract that only records ok/fallback outcomes.
+        self._emit_span(
+            context,
+            name=node.name,
+            status="error",
+            latency_ms=(time.perf_counter() - node_started) * 1000,
+            error=str(last_error) if last_error else None,
+        )
         raise GraphExecutionError(
             "node '%s' failed: %s" % (node.name, last_error)
         ) from last_error
+
+    def _record(self, context: GraphContext, event: TraceEvent) -> None:
+        """Append a node trace event and mirror it as a ``span`` telemetry
+        event parented on the current turn."""
+        context.trace.append(event)
+        self._emit_span(
+            context,
+            name=event.node,
+            status=event.status,
+            latency_ms=event.latency_ms,
+            error=event.error,
+        )
+
+    def _emit_span(
+        self,
+        context: GraphContext,
+        *,
+        name: str,
+        status: str,
+        latency_ms: float,
+        error: Optional[str],
+    ) -> None:
+        """Emit a ``span`` telemetry event parented on the current turn. No-ops
+        without a turn context or when tracing is disabled (zero overhead: no
+        span built, no enqueue)."""
+        if not context.turn_id:
+            return
+        tracer = self._tracer if self._tracer is not None else get_tracer()
+        if not tracer.enabled:
+            return
+        now = tracer.now_ms()
+        tracer.span(
+            session_id=context.session_id,
+            turn_id=context.turn_id,
+            span_id=tracer.new_id(),
+            name=name,
+            status=status,
+            started_at_ms=max(0, now - int(round(latency_ms))),
+            ended_at_ms=now,
+            parent_id=context.turn_id,
+            attributes={"error": error} if error else None,
+        )

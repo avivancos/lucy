@@ -16,9 +16,11 @@ order unless the dependency notes say a sprint can start early.
 | S6 Provider ecosystem | Providers | 28, 29, 38, 51 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers |
 | S7 Cloud observability seam | Platform | 30, 47*, 48* | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard |
 | S8 Launch | Launch | 46, 49, 50 | Public repo installable: `pip install` + quickstart from scratch on a clean machine |
+| S9 Analytics & SRE observability | Platform/Runtime | 52, 53, 54, 55, 56, 57, 58*, 59*, 60* | Local run serves an analytics-model-v1 rollup at `/analytics` and a Grafana board renders RED/USE metrics from `/metrics/prometheus`; with `LUCY_API_KEY` set, the same events land in the platform warehouse and a cross-run funnel/cost board renders |
 
 Cards marked `*` live in `lucy-platform/backlog/` (47 ingest v0, 48 dashboard
-on real traces), not in this repo.
+on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
+60 analytics BI dashboards), not in this repo.
 
 ## Dependency notes
 
@@ -31,6 +33,9 @@ on real traces), not in this repo.
 - S7 needs S1 (the `lucy.observe` seam) and can run parallel to S2-S6.
 - S8 is last and gates on everything shipped in S1-S7 that the launch story
   demos.
+- S9 open cards (52-57) need S1 (the `lucy.observe` seam, cards 24/25) and can
+  run parallel to S5-S7; the platform cards 58*-60* need S7 (the cloud seam,
+  cards 30/47). S9 is not an S8 launch gate.
 
 ## Sprint field convention
 

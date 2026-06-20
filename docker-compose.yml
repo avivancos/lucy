@@ -7,6 +7,14 @@ services:
     env_file: .env.example
     ports:
       - "8000:8000"
+    volumes:
+      # Mount the working tree so `docker compose run --rm lucy-api pytest`
+      # validates the real repo. Several contract tests resolve ROOT to the
+      # repo root and read files the image does not COPY (agents.md, MEMORY.md,
+      # docs/, backlog/, LICENSE, NOTICE, infra/, media-gateway-rust/).
+      # Installed deps live in site-packages and are unaffected; `lucy` stays
+      # importable via the editable install pointing at /app/src.
+      - .:/app
     depends_on:
       - postgres
       - redis
@@ -45,13 +53,13 @@ services:
       POSTGRES_USER: lucy
       POSTGRES_PASSWORD: lucy
       POSTGRES_DB: lucy
-    ports:
-      - "5432:5432"
+    # Reachable in-network as `postgres:5432`; not published to the host so the
+    # documented `docker compose run --rm lucy-api pytest` and `up` do not clash
+    # with another local Postgres on 5432. Add a host mapping if you need it.
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Reachable in-network as `redis:6379`; not published to the host (see above).
 
   otel-collector:
     image: otel/opentelemetry-collector:0.104.0

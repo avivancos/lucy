@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List
+
+if TYPE_CHECKING:
+    from lucy.testing import LocalEmbeddingFixture
 
 
 @dataclass(frozen=True)
@@ -63,27 +66,6 @@ class InMemoryRagIndex:
 
         scored.sort(key=lambda chunk: (-chunk.score, chunk.id))
         return RagResult(query=query, chunks=scored[:max_chunks])
-
-
-@dataclass
-class LocalEmbeddingFixture:
-    vectors: Dict[str, List[float]]
-
-    def embed_query(self, query: str) -> List[float]:
-        return self.vectors.get("query:%s" % query, _deterministic_vector(query))
-
-    def embed_chunk(self, chunk: RagChunk) -> List[float]:
-        return self.vectors.get(
-            "chunk:%s" % chunk.id,
-            _deterministic_vector(chunk.text),
-        )
-
-
-def _deterministic_vector(text: str, dimensions: int = 8) -> List[float]:
-    vector = [0.0] * dimensions
-    for index, character in enumerate(text.lower()):
-        vector[index % dimensions] += float(ord(character) % 31)
-    return vector
 
 
 def _cosine_similarity(left: List[float], right: List[float]) -> float:
@@ -170,3 +152,22 @@ class SpeculativeRagNode:
 
         self._cache[query] = result
         return result
+
+
+_MOVED_TO_TESTING = ("LocalEmbeddingFixture",)
+
+
+def __getattr__(name: str) -> object:
+    """Deprecation shim: the embedding fixture moved to lucy.testing (card 22)."""
+    if name in _MOVED_TO_TESTING:
+        import warnings
+
+        from lucy import testing
+
+        warnings.warn(
+            "lucy.rag.%s moved to lucy.testing; import it from lucy.testing" % name,
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(testing, name)
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))

@@ -3,10 +3,10 @@ import asyncio
 from lucy.rag import (
     HybridRagIndex,
     InMemoryRagIndex,
-    LocalEmbeddingFixture,
     RagChunk,
     SpeculativeRagNode,
 )
+from lucy.testing import LocalEmbeddingFixture
 
 
 def test_in_memory_rag_retrieves_ranked_grounded_chunks():

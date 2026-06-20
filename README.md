@@ -35,8 +35,13 @@ For backend-only development on a prepared Python environment:
 ```bash
 pip install -e ".[dev]"
 pytest
-uvicorn lucy.api.app:create_app --factory --reload
+uvicorn lucy.serve.app:create_app --factory --reload
 ```
+
+`lucy.serve.app:create_app` is the framework serving runtime (health, metrics,
+realtime SSE, models, evals). The legacy `lucy.api.app` entrypoint still works
+but is deprecated; it additionally mounts the fleet and Pili routes until they
+move to their own repos.
 
 The FastAPI developer portal is available at `/docs`, ReDoc at `/redoc`, and the
 OpenAPI contract at `/openapi.json`.

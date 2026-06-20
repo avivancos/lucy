@@ -1,25 +1,48 @@
-"""FastAPI schema contracts for Lucy."""
+"""Deprecated: framework schemas moved to lucy.serve.schemas (card 23).
+
+This module re-exports the framework schemas (`LucyApiModel`, `HealthResponse`)
+from `lucy.serve.schemas` and, transitionally, still defines the platform fleet
+and Pili response models until they move to lucy-platform (card 21) and pili
+(card 20). Importing from here emits DeprecationWarning.
+"""
 
 from __future__ import annotations
 
+import warnings
 from typing import List
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from lucy.metrics import LatencyWaterfall
+from lucy.serve.schemas import HealthResponse, LucyApiModel
 from lucy.specs import FunnelStage, SentimentLabel
 
+warnings.warn(
+    "lucy.api.schemas is deprecated; framework schemas live in lucy.serve.schemas",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-class LucyApiModel(BaseModel):
-    """Base schema for API responses exposed through FastAPI/OpenAPI."""
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class HealthResponse(LucyApiModel):
-    service: str
-    status: str
-    version: str
+__all__ = [
+    "LucyApiModel",
+    "HealthResponse",
+    "AgentSummary",
+    "DeploymentSummary",
+    "SessionSummary",
+    "TraceSummary",
+    "McpServerSummary",
+    "McpCommandSummary",
+    "PiliHealthResponse",
+    "PiliVoiceEventRequest",
+    "PiliVoiceEventResponse",
+    "PiliBookingHoldRequest",
+    "PiliBookingHoldResponse",
+    "AgentSummaryList",
+    "DeploymentSummaryList",
+    "SessionSummaryList",
+    "TraceSummaryList",
+    "McpServerSummaryList",
+]
 
 
 class AgentSummary(LucyApiModel):

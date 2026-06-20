@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import json
-from typing import AsyncIterator, Dict, List
+from typing import TYPE_CHECKING, Dict, Optional
 
 from pydantic import BaseModel, Field
 
 from lucy.specs import FunnelStage, SentimentLabel
+
+if TYPE_CHECKING:
+    from lucy.observe import Tracer
 
 
 class CostBreakdown(BaseModel):
@@ -119,14 +121,42 @@ class RealtimeMetricEvent(BaseModel):
         }
 
 
-class LocalMetricEventChannel:
-    def __init__(self, events: List[RealtimeMetricEvent]):
-        self.events = events
+def emit_cost(
+    cost: CostBreakdown,
+    *,
+    session_id: str,
+    turn_id: Optional[str] = None,
+    tracer: Optional["Tracer"] = None,
+) -> None:
+    """Emit a ``cost`` telemetry event for a session (and optionally a turn).
 
-    async def sse(self) -> AsyncIterator[str]:
-        for event in self.events:
-            yield "event: metric\n"
-            yield "data: %s\n\n" % json.dumps(
-                event.dashboard_payload(),
-                sort_keys=True,
-            )
+    Resolves the process-global tracer when none is injected and no-ops when
+    tracing is disabled, so cost accounting routes through the same single
+    tracer as spans, turns, and tool calls (card 25). The import is local to
+    avoid the ``lucy.observe`` -> ``lucy.metrics`` cycle.
+    """
+    from lucy.observe import get_tracer
+
+    chosen = tracer if tracer is not None else get_tracer()
+    if not chosen.enabled:
+        return
+    chosen.cost(session_id=session_id, cost=cost, turn_id=turn_id)
+
+
+_MOVED_TO_TESTING = ("LocalMetricEventChannel",)
+
+
+def __getattr__(name: str) -> object:
+    """Deprecation shim: the SSE channel fixture moved to lucy.testing (card 22)."""
+    if name in _MOVED_TO_TESTING:
+        import warnings
+
+        from lucy import testing
+
+        warnings.warn(
+            "lucy.metrics.%s moved to lucy.testing; import it from lucy.testing" % name,
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(testing, name)
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))

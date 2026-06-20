@@ -1,6 +1,5 @@
+import tomllib
 from pathlib import Path
-
-import tomli
 
 from lucy import __version__
 
@@ -9,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_pyproject():
-    return tomli.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 def test_python_package_metadata_and_dependencies():

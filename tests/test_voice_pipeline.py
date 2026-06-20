@@ -2,11 +2,10 @@ import asyncio
 
 import pytest
 
+from lucy.testing import LocalSttSimulator, LocalTtsSimulator
 from lucy.voice import (
     AudioChunk,
     BargeInEvent,
-    LocalSttSimulator,
-    LocalTtsSimulator,
     ProviderPayloadError,
     ProviderTimeoutEvent,
     RealtimeVoicePipeline,

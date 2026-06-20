@@ -1,19 +1,24 @@
-"""FastAPI control plane for Lucy."""
+"""Deprecated: the framework app moved to lucy.serve.app (card 23).
+
+Transitional shim: `create_app` builds on `lucy.serve.app.create_app` and ALSO
+mounts the platform fleet routes and the Pili vertical routes until they are
+extracted to lucy-platform (card 21) and pili (card 20). Importing this module
+emits DeprecationWarning. `uvicorn lucy.api.app:app` keeps working until the
+compose/Dockerfile target flips to `lucy.serve.app:create_app` in card 21.
+"""
 
 from __future__ import annotations
 
+import warnings
 from typing import Dict, List, Optional, Sequence
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
 
-from lucy import __version__
 from lucy.api.schemas import (
     AgentSummary,
     AgentSummaryList,
     DeploymentSummary,
     DeploymentSummaryList,
-    HealthResponse,
     McpCommandSummary,
     McpServerSummary,
     McpServerSummaryList,
@@ -27,18 +32,17 @@ from lucy.api.schemas import (
     TraceSummary,
     TraceSummaryList,
 )
-from lucy.evals import booking_happy_path
-from lucy.metrics import (
-    CostBreakdown,
-    FunnelEvent,
-    LatencyWaterfall,
-    LocalMetricEventChannel,
-    RealtimeMetricEvent,
-    SentimentScore,
+from lucy.mcp import McpClient, McpPermissionError
+from lucy.metrics import CostBreakdown, FunnelEvent, LatencyWaterfall
+from lucy.serve.app import create_app as _create_framework_app
+from lucy.specs import FunnelStage
+from lucy.testing import LocalMcpCommandTransport
+
+warnings.warn(
+    "lucy.api.app is deprecated; use lucy.serve.app:create_app",
+    DeprecationWarning,
+    stacklevel=2,
 )
-from lucy.mcp import LocalMcpCommandTransport, McpClient, McpPermissionError
-from lucy.providers import default_model_registry, registry_summary
-from lucy.specs import FunnelStage, SentimentLabel
 
 
 def _pili_booking_id(lead_id: str, requested_slot: str) -> str:
@@ -75,45 +79,16 @@ def _demo_cost_breakdown() -> CostBreakdown:
     )
 
 
-def _demo_realtime_metric_event() -> RealtimeMetricEvent:
-    sentiment = SentimentScore(
-        label=SentimentLabel.POSITIVE,
-        confidence=0.86,
-        model="registry:sentiment-default",
-    )
-    funnel = FunnelEvent(
-        session_id="sess_demo",
-        stage=FunnelStage.BOOKED,
-        confidence=0.91,
-        crm_payload={"lead_id": "lead_demo"},
-    )
-    return RealtimeMetricEvent(
-        event_id="metric_sess_demo_1",
-        session_id="sess_demo",
-        lead_id="lead_demo",
-        sentiment=sentiment,
-        funnel=funnel,
-        cost=_demo_cost_breakdown(),
-        emitted_at_ms=1200,
-    )
-
-
 def create_app(
     allowed_pili_tools: Optional[Sequence[str]] = None,
 ) -> FastAPI:
-    app = FastAPI(
-        title="Lucy API",
-        version=__version__,
-        description="Control plane for Lucy voice-agent infrastructure.",
-    )
+    # Framework routes (health, metrics, realtime SSE, models, evals) come from
+    # the open serving runtime; this shim adds the fleet and Pili routes on top.
+    app = _create_framework_app()
     pili_mcp = McpClient(
         LocalMcpCommandTransport(),
         allowed_tools=list(allowed_pili_tools or DEFAULT_PILI_MCP_TOOLS),
     )
-
-    @app.get("/health", response_model=HealthResponse, tags=["system"])
-    async def health() -> HealthResponse:
-        return HealthResponse(service="lucy-api", status="ok", version=__version__)
 
     @app.get("/agents", response_model=AgentSummaryList, tags=["agents"])
     async def agents() -> AgentSummaryList:
@@ -167,42 +142,6 @@ def create_app(
                 ),
             )
         ]
-
-    @app.get("/metrics", tags=["metrics"])
-    async def metrics() -> Dict[str, object]:
-        return {
-            "primary_metric": "cost_per_minute",
-            "latency_p95_ms": 620,
-            "sentiment": SentimentScore(
-                label=SentimentLabel.POSITIVE,
-                confidence=0.86,
-                model="registry:sentiment-default",
-            ).model_dump(),
-            "funnel": FunnelEvent(
-                session_id="sess_demo",
-                stage=FunnelStage.BOOKED,
-                confidence=0.91,
-                crm_payload={"lead_id": "lead_demo"},
-            ).model_dump(),
-        }
-
-    @app.get("/metrics/realtime", tags=["metrics"])
-    async def realtime_metrics() -> StreamingResponse:
-        channel = LocalMetricEventChannel(events=[_demo_realtime_metric_event()])
-        return StreamingResponse(channel.sse(), media_type="text/event-stream")
-
-    @app.get("/models", tags=["models"])
-    async def models() -> Dict[str, object]:
-        registry = default_model_registry()
-        return {
-            "version": registry.version,
-            "summary": registry_summary(registry),
-            "models": [model.model_dump() for model in registry.models],
-        }
-
-    @app.get("/evals", tags=["evals"])
-    async def evals() -> Dict[str, object]:
-        return {"scenarios": [booking_happy_path().model_dump()]}
 
     @app.get("/mcp/servers", response_model=McpServerSummaryList, tags=["mcp"])
     async def mcp_servers() -> McpServerSummaryList:

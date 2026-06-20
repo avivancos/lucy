@@ -23,6 +23,15 @@ API keys, using only documented top-level imports.
   `lucy.observe`). Everything else stays reachable but unadvertised.
 - `examples/quickstart_voice_agent.py`: <30 lines, runs offline on simulators,
   prints transcript/TTS events and a console trace.
+- Session lifecycle (deferred here from card 25): emit `session.started` on
+  `start_session(session_id)` and `session.ended` on session close through the
+  tracer.
+- Unified turn (deferred here from card 25): assemble one `turn` event per
+  caller turn spanning STT+LLM+MCP+TTS - populate the full `LatencyWaterfall`
+  (not STT-only) and aggregate provider timeout events from both
+  `handle_audio_turn` and `synthesize_response`. Card 25 instrumented the STT
+  half only; `synthesize_response` currently emits no turn event and its TTS
+  provider timeouts never reach telemetry.
 
 ## Files to create/modify
 

@@ -1,7 +1,23 @@
-from fastapi.testclient import TestClient
+"""lucy.api.app is the DEPRECATED transitional app (card 23): it builds on
+lucy.serve.app and still mounts the fleet + Pili routes until cards 21/20
+extract them. Framework-route coverage lives in test_serve_app.py; this file
+guards the full transitional surface and the deprecation warning.
+"""
+
+import importlib
 import json
 
+import pytest
+from fastapi.testclient import TestClient
+
 from lucy.api.app import create_app
+
+
+def test_importing_lucy_api_app_emits_deprecation_warning():
+    import lucy.api.app
+
+    with pytest.warns(DeprecationWarning):
+        importlib.reload(lucy.api.app)
 
 
 def test_health_endpoint():

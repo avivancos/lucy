@@ -1,12 +1,16 @@
-"""Observability bridge for Lucy metrics and traces."""
+"""Legacy OpenTelemetry bridge (backward-compatible, pre-card-24).
+
+These symbols predate the card 24 telemetry package and are re-exported from
+``lucy.observe`` so existing callers keep working. New code uses the
+``TelemetryEvent`` models and the ``TraceExporter`` protocol instead.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Protocol, Union
+from typing import Dict, Protocol, Union
 
 from lucy.metrics import CostBreakdown, LatencyWaterfall
-
 
 TraceAttribute = Union[str, float]
 OtelSpan = Dict[str, object]
@@ -38,14 +42,6 @@ class ObservabilityEvent:
 class OtelSpanExporter(Protocol):
     def export(self, span: OtelSpan) -> None:
         ...
-
-
-class InMemoryOtelSpanExporter:
-    def __init__(self) -> None:
-        self.spans: List[OtelSpan] = []
-
-    def export(self, span: OtelSpan) -> None:
-        self.spans.append(span)
 
 
 @dataclass
