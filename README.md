@@ -14,6 +14,32 @@ dashboard.
 - Docker-first local environment.
 - Optional Rust media gateway sidecar for future audio hot paths.
 
+## Quickstart
+
+Build a voice agent in a few lines, with no API keys and no network - provider
+strings resolve to deterministic local simulators:
+
+```python
+import asyncio
+from lucy import AgentSpec, AudioChunk, LucySpec, VoiceAgent, VoiceSpec
+
+async def main():
+    spec = LucySpec(
+        agent=AgentSpec(name="Quickstart Agent", goal="Help the caller.", prompt="Be helpful."),
+        voice=VoiceSpec(transport="sim", stt_provider="local", tts_provider="local"),
+    )
+    agent = VoiceAgent(spec)
+    with agent.start_session("s1") as session:
+        await session.user_audio(AudioChunk(session_id="s1", data=b"hello there", sequence=0))
+        await session.synthesize(session.last_response or "Hello!")
+
+asyncio.run(main())
+```
+
+A runnable version is in [`examples/quickstart_voice_agent.py`](examples/quickstart_voice_agent.py).
+Everything advertised in `lucy.__all__` is the supported public surface; real
+provider plugins resolve through the same string seam in a later milestone.
+
 ## Primary Metric
 
 ```text

@@ -52,4 +52,26 @@ API keys, using only documented top-level imports.
 
 ## Improvements noted
 
-<!-- Fill during execution. -->
+An 11-agent adversarial review of the facade diff confirmed the curated surface,
+provider resolution, and DoD fidelity, and surfaced fixes (all applied):
+
+- Session state machine hardened: `user_audio`/`synthesize` now raise once the
+  session is closed (no orphan turn enqueued after `session.ended`), and
+  `synthesize` requires an open turn instead of fabricating a phantom turn that
+  inflated `turn_index`. Covered by `test_turn_methods_raise_after_close` and
+  `test_synthesize_without_open_turn_raises`.
+- `dir(lucy)` now literally equals the curated surface via a module `__dir__`
+  (internal submodules no longer leak into `dir()`/IDE autocomplete).
+- `user_audio` no longer returns the internal `TurnLatencyEvent` (already folded
+  into the unified turn event); the caller stream is transcripts + timeouts.
+- Quickstart trimmed under 30 lines; the test now asserts the bound.
+- Added a README Quickstart section pointing at the runnable example.
+
+Deferred (documented, not blocking):
+
+- The facade's unified `turn` always reports `interrupted=False`. The pipeline
+  tracks barge-in internally, but `user_audio` calls `handle_audio_turn` without
+  a turn id (to suppress the pipeline's own turn emission), so the flag is not
+  read back. Wiring it needs a session-level barge-in entry point, which is
+  beyond this card's `user_audio`/`synthesize` API - revisit when barge-in
+  handling lands in the runtime milestones (S3).

@@ -473,6 +473,7 @@ def configure(
     exporters: Optional[Sequence[TraceExporter]] = None,
     sample_rate: Optional[float] = None,
     redact_pii: Optional[bool] = None,
+    record_audio: Optional[bool] = None,
 ) -> Tracer:
     """Build a tracer. Explicit arguments win; otherwise environment variables.
 
@@ -496,6 +497,7 @@ def configure(
         exporters=chosen,
         sample_rate=rate,
         redact_pii=redaction,
+        record_audio=False if record_audio is None else record_audio,
         enabled=enabled,
     )
 
