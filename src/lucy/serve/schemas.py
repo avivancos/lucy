@@ -1,8 +1,9 @@
 """Framework (non-fleet, non-Pili) response schemas for the serving runtime.
 
 These are the open serving-runtime schemas (ADR 0010, card 23). Platform fleet
-and Pili response models live in the deprecated lucy.api.schemas shim until they
-move to lucy-platform (card 21) and pili (card 20).
+response models live in the deprecated lucy.api.schemas shim until they move to
+lucy-platform (card 21); the Pili response models were extracted to the pili
+repo (card 20).
 """
 
 from __future__ import annotations

@@ -39,4 +39,21 @@ lucy: a sanitized booking agent built only on public lucy APIs.
 
 ## Improvements noted
 
-<!-- Fill during execution. -->
+A 13-agent two-repo adversarial review confirmed byte-for-byte behavior parity
+in the extracted pili app and a genuinely standalone-on-lucy dependency. Fixes
+applied:
+
+- Removed the now-dead `McpCommandSummary` from `lucy.api.schemas`: it only ever
+  supported the Pili response models (no fleet route uses it), so it was
+  orphaned open-core surface after extraction. Pili defines its own copy.
+- Restored the full `/mcp/servers` payload contract test (name + status +
+  allowed_tools) in `tests/test_api.py`; after `test_pili_api.py` moved out, the
+  surviving lucy coverage only asserted `allowed_tools`.
+- Fixed a broken relative README link to Pili (`../../../pili` points outside
+  the lucy repo) - now plain prose, since Pili is a separate private repo.
+- Added a `.gitignore` to the pili repo.
+
+Deferred (by design): `git init` of the pili repo is card 27 ("Initialize git
+history for the three repos"), so the pili working tree is left un-versioned for
+now. The fleet routes (`/agents`, `/deployments`, ...) and their schemas remain
+in the deprecated `lucy.api` shim until card 21 extracts them to lucy-platform.
