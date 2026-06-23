@@ -3,9 +3,8 @@
 This app holds the routes that describe the LOCAL process - health, metrics,
 realtime SSE, models, evals - so "run your agent" never requires the platform.
 Platform fleet routes (agents, deployments, sessions, traces, mcp servers, crm
-events) are NOT mounted here; they live in lucy-platform and, during the
-transition, in the deprecated lucy.api.app shim. The Pili vertical routes were
-extracted to the pili repo (card 20).
+events) are NOT mounted here; they were extracted to lucy-platform (card 21).
+The Pili vertical routes were extracted to the pili repo (card 20).
 """
 
 from __future__ import annotations

@@ -1,17 +1,30 @@
-"""lucy.api.app is the DEPRECATED transitional app (card 23): it builds on
-lucy.serve.app and still mounts the fleet routes until card 21 extracts them
-(the Pili vertical was extracted to the pili repo in card 20). Framework-route
-coverage lives in test_serve_app.py; this file guards the full transitional
-surface and the deprecation warning.
+"""lucy.api.app is the DEPRECATED transitional app (card 23). After the fleet
+routes moved to lucy-platform (card 21) and the Pili vertical to the pili repo
+(card 20), it now just re-exposes the open framework serving app under the
+legacy import path. Framework-route coverage lives in test_serve_app.py; this
+file guards the deprecation warning and that the shim serves ONLY process-local
+routes (no fleet, no Pili).
 """
 
 import importlib
-import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 from lucy.api.app import create_app
+
+FRAMEWORK_ROUTES = ["/health", "/metrics", "/metrics/realtime", "/models", "/evals"]
+EXTRACTED_ROUTES = [
+    "/agents",
+    "/deployments",
+    "/sessions",
+    "/traces",
+    "/mcp/servers",
+    "/crm/events",
+    "/pili/health",
+    "/pili/voice/events",
+    "/pili/bookings",
+]
 
 
 def test_importing_lucy_api_app_emits_deprecation_warning():
@@ -45,92 +58,10 @@ def test_fastapi_app_metadata_and_developer_docs():
     assert "ReDoc" in redoc.text
 
 
-def test_openapi_contains_public_routes():
-    client = TestClient(create_app())
-    schema = client.get("/openapi.json").json()
-    paths = schema["paths"]
+def test_shim_serves_only_process_local_routes():
+    paths = TestClient(create_app()).get("/openapi.json").json()["paths"]
 
-    for route in [
-        "/health",
-        "/agents",
-        "/deployments",
-        "/sessions",
-        "/traces",
-        "/metrics",
-        "/metrics/realtime",
-        "/models",
-        "/evals",
-        "/mcp/servers",
-        "/crm/events",
-    ]:
-        assert route in paths
-
-
-def test_mcp_servers_route_returns_full_contract():
-    # Full /mcp/servers payload contract (name + status + allowed_tools), kept in
-    # lucy when the Pili tests moved out (the fleet route stays until card 21).
-    response = TestClient(create_app()).get("/mcp/servers")
-
-    assert response.status_code == 200
-    assert response.json() == [
-        {"name": "crm", "status": "configured", "allowed_tools": ["crm.upsert_lead"]},
-        {
-            "name": "calendar",
-            "status": "configured",
-            "allowed_tools": ["calendar.hold_slot"],
-        },
-    ]
-
-
-def test_transitional_app_serves_no_pili_route():
-    # The Pili vertical was extracted to its own repo (card 20); even the
-    # transitional shim must not serve any /pili/* route.
-    schema = create_app().openapi()
-    assert not any(path.startswith("/pili") for path in schema["paths"])
-
-
-def test_control_plane_routes_return_deterministic_contract_payloads():
-    client = TestClient(create_app())
-
-    agents = client.get("/agents").json()
-    deployments = client.get("/deployments").json()
-    sessions = client.get("/sessions").json()
-    traces = client.get("/traces").json()
-    metrics = client.get("/metrics").json()
-    models = client.get("/models").json()
-    evals = client.get("/evals").json()
-    mcp_servers = client.get("/mcp/servers").json()
-    crm_events = client.get("/crm/events").json()
-
-    assert agents[0]["id"] == "agent_sales_booking"
-    assert deployments[0]["environment"] == "local"
-    assert sessions[0]["status"] == "live"
-    assert sessions[0]["cost_per_minute"] > 0
-    assert traces[0]["waterfall"]["stt_ms"] == 145
-    assert metrics["primary_metric"] == "cost_per_minute"
-    assert models["summary"]["stt"] >= 1
-    assert evals["scenarios"][0]["expected_outcome"] == "booked"
-    assert mcp_servers[0]["allowed_tools"] == ["crm.upsert_lead"]
-    assert mcp_servers[1]["allowed_tools"] == ["calendar.hold_slot"]
-    assert crm_events["events"][0]["stage"] == "booked"
-
-
-def test_realtime_metrics_sse_route_streams_typed_metric_event():
-    client = TestClient(create_app())
-
-    response = client.get("/metrics/realtime")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert "event: metric" in response.text
-
-    data_line = [
-        line for line in response.text.splitlines() if line.startswith("data: ")
-    ][0]
-    payload = json.loads(data_line.removeprefix("data: "))
-
-    assert payload["session_id"] == "sess_demo"
-    assert payload["sentiment"]["label"] == "positive"
-    assert payload["funnel"]["stage"] == "booked"
-    assert payload["crm"]["lead_id"] == "lead_demo"
-    assert payload["cost"]["cost_per_minute"] > 0
+    for route in FRAMEWORK_ROUTES:
+        assert route in paths, route
+    for route in EXTRACTED_ROUTES:
+        assert route not in paths, route

@@ -29,17 +29,6 @@ services:
       - postgres
       - redis
 
-  lucy-dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    environment:
-      NEXT_PUBLIC_LUCY_API_URL: http://localhost:8000
-    ports:
-      - "3000:3000"
-    depends_on:
-      - lucy-api
-
   lucy-media-gateway:
     build:
       context: ./media-gateway-rust

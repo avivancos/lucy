@@ -1,18 +1,20 @@
 # Lucy
 
-Lucy is a Python-first framework and platform foundation for production voice
-agents. It is designed around ultra-low-latency voice pipelines, MCP-first
-integrations, CRM-ready metrics, synthetic evaluations, and an operations-grade
-dashboard.
+Lucy is the Python-first, open-core SDK for production voice agents. It is
+designed around ultra-low-latency voice pipelines, MCP-first integrations,
+CRM-ready metrics, and synthetic evaluations. The closed platform (ops
+dashboard, fleet control plane) builds on this SDK and lives in a separate
+repo (ADR 0010).
 
 ## Architecture
 
-- Python + FastAPI control plane.
+- Python + FastAPI process-local control plane.
 - Async Python graph runtime for the first multi-node executor.
-- React + Next.js dashboard.
 - MCP-first external integrations.
 - Docker-first local environment.
 - Optional Rust media gateway sidecar for future audio hot paths.
+- React + Next.js ops dashboard and fleet control plane ship in the closed
+  lucy-platform repo, not here.
 
 ## Quickstart
 
@@ -66,8 +68,9 @@ uvicorn lucy.serve.app:create_app --factory --reload
 
 `lucy.serve.app:create_app` is the framework serving runtime (health, metrics,
 realtime SSE, models, evals). The legacy `lucy.api.app` entrypoint still works
-but is deprecated; it additionally mounts the fleet and Pili routes until they
-move to their own repos.
+but is deprecated; it is now a thin alias that serves the same process-local
+routes. The fleet routes moved to lucy-platform (card 21) and the Pili vertical
+to its own repo (card 20).
 
 The FastAPI developer portal is available at `/docs`, ReDoc at `/redoc`, and the
 OpenAPI contract at `/openapi.json`.

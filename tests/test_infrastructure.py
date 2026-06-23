@@ -13,7 +13,6 @@ def test_docker_compose_defines_lucy_local_stack():
     for service in [
         "lucy-api",
         "lucy-worker",
-        "lucy-dashboard",
         "lucy-media-gateway",
         "postgres",
         "redis",
@@ -21,8 +20,10 @@ def test_docker_compose_defines_lucy_local_stack():
     ]:
         assert service in services
 
+    # The dashboard moved to lucy-platform (card 21); lucy no longer ships it.
+    assert "lucy-dashboard" not in services
+
     assert services["lucy-api"]["ports"] == ["8000:8000"]
-    assert services["lucy-dashboard"]["ports"] == ["3000:3000"]
     assert services["lucy-media-gateway"]["ports"] == ["8081:8081"]
     assert services["otel-collector"]["volumes"] == [
         "./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"
@@ -32,7 +33,6 @@ def test_docker_compose_defines_lucy_local_stack():
 def test_dockerfiles_and_otel_config_exist():
     for path in [
         "Dockerfile.api",
-        "dashboard/Dockerfile",
         "media-gateway-rust/Dockerfile",
         "media-gateway-rust/Cargo.toml",
         "media-gateway-rust/src/main.rs",
