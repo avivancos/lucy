@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Dict, List, Literal, Optional, Protocol, Union
 
 import httpx
@@ -108,6 +108,10 @@ class ScriptedLlmTurn:
     tokens: List[str]
     usage: UsageReport
     finish_reason: str = "stop"
+    # Tool calls this turn emits after its tokens (card 34). Each yields one
+    # ToolCallDelta (arguments as a single JSON fragment) then ToolCallReady;
+    # script finish_reason="tool_calls" on such a turn.
+    tool_calls: List[ToolCallReady] = field(default_factory=list)
 
 
 class LocalLlmSimulator:
@@ -135,6 +139,15 @@ class LocalLlmSimulator:
             for token in turn.tokens:
                 await self._clock.sleep(self._interval_s)
                 yield TokenDelta(text=token)
+            for call in turn.tool_calls:
+                yield ToolCallDelta(
+                    call_id=call.call_id,
+                    name=call.name,
+                    arguments_delta=json.dumps(call.arguments),
+                )
+                yield ToolCallReady(
+                    call_id=call.call_id, name=call.name, arguments=call.arguments
+                )
             yield turn.usage
             yield StreamEnd(finish_reason=turn.finish_reason)  # type: ignore[arg-type]
         except asyncio.CancelledError:

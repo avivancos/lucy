@@ -75,6 +75,7 @@ class _ActiveTurn:
     tts_ms: int = 0
     llm_ms: float = 0.0
     llm_cost: float = 0.0
+    mcp_tools_ms: float = 0.0
     clock_start: float = 0.0
     planner: Optional[TtsPlanner] = None  # set in driver mode
     task: "Optional[asyncio.Task[None]]" = None
@@ -227,6 +228,7 @@ class VoiceSession:
                 turn.assistant_text = event.assistant_text
                 turn.llm_ms = event.llm_ms
                 turn.llm_cost = event.llm_cost
+                turn.mcp_tools_ms = event.mcp_tools_ms
         await turn.playback_finished.wait()
 
     async def _interrupt(
@@ -291,7 +293,7 @@ class VoiceSession:
             stt_ms=turn.stt_ms,
             rag_ms=0.0,
             llm_ms=turn.llm_ms,
-            mcp_tools_ms=0.0,
+            mcp_tools_ms=turn.mcp_tools_ms,
             tts_ms=float(turn.tts_ms),
             transport_ms=float(self.budgets.control_transport_ms),
         )

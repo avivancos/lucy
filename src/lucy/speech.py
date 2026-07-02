@@ -42,6 +42,12 @@ class SentenceAssembler:
         self._buffer = ""
         return [remainder] if remainder else []
 
+    def has_buffered(self) -> bool:
+        """True when an unflushed clause is forming. The tool-round driver
+        suppresses a latency-masking filler when a clause is already buffered
+        (card 34) so the filler never overlaps real speech."""
+        return bool(self._buffer.strip())
+
     def _first_flushable_boundary(self) -> int | None:
         for i, char in enumerate(self._buffer):
             if char in CLAUSE_BOUNDARY_CHARS and len(self._buffer[: i + 1].strip()) >= self._min:

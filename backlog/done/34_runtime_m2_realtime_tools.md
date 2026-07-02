@@ -127,11 +127,18 @@ this card only adds the regression test.
 - Create: `src/lucy/tools.py`, `tests/test_realtime_tools.py`.
 - Modify: `src/lucy/drivers.py` (tool-round continuation),
   `src/lucy/llm.py` (simulator tool-call scripting, only if missing).
+- Modify (scope widened during execution, see Improvements noted):
+  `src/lucy/session.py` (3-line `mcp_tools_ms` plumbing so the driver's
+  accrued tool time reaches `LatencyWaterfall.mcp_tools_ms`, which only
+  `_finalize` builds - Spec step 6 requires this and the driver alone cannot
+  satisfy it) and `src/lucy/speech.py` (a one-line `SentenceAssembler.
+  has_buffered()` accessor for the C5 filler-suppression check, cleaner than
+  reaching `assembler._buffer` from the driver).
 - `src/lucy/mcp.py` stays byte-identical. Nothing else is touched.
 
 ## Chips
 
-- [ ] **C1 - Tool contracts and filler policy.** Record
+- [x] **C1 - Tool contracts and filler policy.** Record
   `shasum src/lucy/mcp.py` in "Improvements noted" before coding. Write
   tests first in new `tests/test_realtime_tools.py`:
   `test_tool_def_key_matches_mcp_allowed_tools_format` and
@@ -140,7 +147,7 @@ this card only adds the regression test.
   `ToolResult`, `FillerPolicy`, `DEFAULT_FILLERS`). Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass
   (>=2 tests).
-- [ ] **C2 - Executor happy path over the real McpClient.** Test first:
+- [x] **C2 - Executor happy path over the real McpClient.** Test first:
   `test_executor_runs_tool_through_mcp_client_and_audits_allowed_call` -
   build `McpClient(LocalMcpCommandTransport(),
   allowed_tools=["crm.book_meeting"])`, execute one tool, assert
@@ -149,7 +156,7 @@ this card only adds the regression test.
   telemetry dict. Implement `McpToolExecutor`. Files: `src/lucy/tools.py`,
   `tests/test_realtime_tools.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass.
-- [ ] **C3 - Typed error results.** Tests first:
+- [x] **C3 - Typed error results.** Tests first:
   `test_denied_tool_yields_permission_result_and_audit_entry` (tool not in
   `allowed_tools`; `error_kind == "permission"`, audit `allowed=False`, no
   exception escapes `execute`),
@@ -161,7 +168,7 @@ this card only adds the regression test.
   `McpToolSchema`; `error_kind == "schema"`). Implement the except branches
   in `McpToolExecutor.execute`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass.
-- [ ] **C4 - Simulator scripted tool calls.** Test first:
+- [x] **C4 - Simulator scripted tool calls.** Test first:
   `test_simulator_streams_tool_call_then_scripted_followup` - script emits
   `ToolCallDelta` fragments then `ToolCallReady`; a second `stream_chat`
   whose messages include the tool-result message streams the scripted final
@@ -169,7 +176,7 @@ this card only adds the regression test.
   fails red; if card 33 already covers it, keep the test and note that in
   "Improvements noted". Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass.
-- [ ] **C5 - Tool round with concurrent filler.** Tests first:
+- [x] **C5 - Tool round with concurrent filler.** Tests first:
   `test_tool_call_mid_stream_speaks_one_filler_and_completes_round` (with
   `ManualClock`: the filler `tts.speak` directive is emitted before the
   tool-result message is appended; the follow-up answer streams after;
@@ -178,7 +185,7 @@ this card only adds the regression test.
   tool-round continuation in `CascadedTurnDriver`
   (`src/lucy/drivers.py`). Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass.
-- [ ] **C6 - Round cap and waterfall accrual.** Tests first:
+- [x] **C6 - Round cap and waterfall accrual.** Tests first:
   `test_tool_rounds_capped_by_typed_budget` (simulator scripted to request a
   tool every round; with `LatencyBudgets(max_tool_rounds_per_turn=2)`
   exactly 2 executions happen, the third request gets
@@ -187,7 +194,7 @@ this card only adds the regression test.
   lands in `LatencyWaterfall.mcp_tools_ms`). Files: `src/lucy/drivers.py`,
   `tests/test_realtime_tools.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass.
-- [ ] **C7 - Verbal recovery end to end.** Tests first:
+- [x] **C7 - Verbal recovery end to end.** Tests first:
   `test_denied_tool_recovers_verbally_audited_no_crash` (the scripted
   follow-up reacts to the permission result with an apology stream; assert
   the `allowed=False` audit entry, the spoken recovery text, and that no
@@ -196,7 +203,7 @@ this card only adds the regression test.
   needed. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all pass
   (>=12 tests).
-- [ ] **C8 - Full suite + bookkeeping.** Run everything, confirm
+- [x] **C8 - Full suite + bookkeeping.** Run everything, confirm
   `shasum src/lucy/mcp.py` matches the value recorded in C1, fill
   "Improvements noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green.
@@ -221,7 +228,8 @@ this card only adds the regression test.
 - Do not implement speculation or prompt-cache plumbing (card 36).
 - Do not speak more than one filler per tool round, and none when a
   sentence is already buffered or playing.
-- Do not touch files outside the File scope list above.
+- Do not touch files outside the File scope list above (widened to
+  `session.py` + `speech.py` per Improvements noted; `mcp.py` still frozen).
 - Do not check a chip or Definition of Done box without running its Verify
   command.
 - Do not put platform/Pili concerns inside the SDK (ADR 0010): the
@@ -231,19 +239,19 @@ this card only adds the regression test.
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all
+- [x] `.venv/bin/python -m pytest tests/test_realtime_tools.py -q` -> all
       pass (>=12 tests): a mid-stream tool call produces filler speech and a
       completed tool round; a denied tool surfaces as verbal recovery,
       audited, no crash; rounds are capped by the typed budget; timeouts
       recover verbally; `mcp_tools_ms` accrues into the turn waterfall.
-- [ ] `.venv/bin/python -m pytest tests/test_realtime_tools.py
+- [x] `.venv/bin/python -m pytest tests/test_realtime_tools.py
       tests/test_registry_mcp_metrics.py -q` -> all pass (existing
       `McpClient` behavior untouched).
-- [ ] `shasum src/lucy/mcp.py` -> identical to the checksum recorded in C1
+- [x] `shasum src/lucy/mcp.py` -> identical to the checksum recorded in C1
       (`McpClient` reused unchanged).
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_realtime_tools.py`
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_realtime_tools.py`
       -> no matches.
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon is
       available).
 - [ ] Post-task audit done; follow-up cards raised for anything noticed.
@@ -257,7 +265,76 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
+- `shasum src/lucy/mcp.py` baseline recorded before coding (C1):
+  `3906e485c0b5078f448b85614f7cbb29e8ef02ce`. `McpClient` must remain
+  byte-identical; C8 re-checks this value.
+- File scope widened to `session.py` (+`speech.py`): Spec step 6 requires tool
+  time in `LatencyWaterfall.mcp_tools_ms`, but that waterfall is constructed
+  only in `session._finalize`; a driver-only change would leave it permanently
+  `0.0`. Minimal 3-line plumbing (`_ActiveTurn.mcp_tools_ms`, capture on the
+  `TurnDriverReport` branch, use it in `_finalize`). `speech.py` gains a
+  one-line `SentenceAssembler.has_buffered()` for filler suppression.
+- Context-primer correction: `LocalMcpCommandTransport` moved to `lucy.testing`
+  (card 22); importing it from `lucy.mcp` emits a `DeprecationWarning` that
+  would trip the zero-warnings DoD. Tests import from `lucy.testing`.
+- C4 confirmed a real extension (not test-only): `LocalLlmSimulator`/
+  `ScriptedLlmTurn` had no tool-call support. Added a `tool_calls` field.
+- `ToolCallsNotSupported` kept and now raised only when `tool_executor is
+  None`, so card 33's `test_tool_call_event_raises_tool_calls_not_supported`
+  stays green and the driver change is backward-compatible.
+
+- C8 verification: `shasum src/lucy/mcp.py` == `3906e485c0b5078f448b85614f7cbb29e8ef02ce`
+  (unchanged); full suite 227 passed, 3 pre-existing warnings, zero new;
+  `tests/test_realtime_tools.py` 20/20 stress runs green.
+- Lint/typecheck: `ruff`/`mypy` are not installed in the Docker image and the
+  repo has no ruff config or ruff-formatted baseline yet - that is exactly
+  card 63 (`lint_and_typecheck_in_docker`). `ruff check` on the card-34 files
+  adds no new errors (the one F401 it reports, `ControlEvent` in `session.py`,
+  is pre-existing from card 32). Deferred `ruff format`/`mypy` to card 63 to
+  avoid a scope-violating repo-wide reformat of card 32/33 code.
+
 <!-- Fill during execution. Raise a follow-up card per item. -->
+
+## Review evidence
+
+Five-reviewer roster + adversarial verification of every P0-P2 finding (roster
++ tiers per `CLAUDE.md`). Final: 227 passed in Docker; `mcp.py` byte-identical;
+`test_realtime_tools.py` 20/20 stress-green.
+
+- **code-reviewer** (sonnet) - **PASS.** Round cap, filler concurrency
+  (`create_task` before the filler yield, awaited same round), backward-compat
+  `ToolCallsNotSupported`, `llm_ms`/`mcp_tools_ms` separation, and
+  `LlmMessage(**to_llm_message())` validity all verified.
+- **test-auditor** (sonnet) - **FAIL -> resolved.** `[P1] test-001`: the
+  `unknown_tool` branch (`drivers.py`) had zero coverage - mutation-confirmed
+  (deleting it left all tests green). FIXED with
+  `test_unknown_tool_name_yields_unknown_tool_result_no_execution` (asserts no
+  execution, no audit, and the typed result fed back; deleting the branch now
+  raises `KeyError` and fails the test).
+- **simplicity-reviewer** (sonnet) - **PASS.** `[P3] simp-001` (guard
+  duplicated across the `ToolCallDelta`/`ToolCallReady` branches) FIXED (merged
+  into one branch). `[P3] simp-002` (extract the tool-round block) REJECTED:
+  the block interleaves the filler `yield` with `create_task`/`await`, so it
+  must stay in the async generator; extraction "is a wash" (reviewer's words).
+- **docs-reviewer** (haiku) - **FAIL -> both findings refuted.** `docs-001`
+  (telemetry comment "misleading") and `docs-002` (`locale=""` "contradicts
+  spec") were both REFUTED by the opus verifier: the comment's claims are
+  literally true, and `locale=""` is the absent-sentinel (`filler_for` returns
+  `None`), not a hardcoded locale - and it is required for card 33
+  backward-compat. `[P3] docs-003/004` (missing `BargeInPolicy`/`ToolProfile`
+  docstrings) FIXED.
+- **security-reviewer** (opus) - **PASS.** `mcp.py` byte-identical verified;
+  the executor calls `McpClient.call_tool` only (never the transport); no
+  second audit mechanism; the `emit` dict is exactly the five non-PII keys.
+  `[P3] sec-001` (the `emit` seam is a parallel export path not governed by the
+  wire-spec redaction; safe today) disposition: safe by construction, and the
+  comment now warns against widening the dict with unredacted payload; routing
+  driver tool telemetry through `lucy.observe` is a possible future
+  defence-in-depth follow-up.
+- `[P3] code-001` (intermittent `test_realtime_tools` failure seen twice
+  *during* the parallel review): NOT REPRODUCED in a clean run (20/20 stress +
+  full suite green); attributed to other review agents running mutation probes
+  against `drivers.py` while the full suite ran concurrently.
 
 ## Pending human testing
 
