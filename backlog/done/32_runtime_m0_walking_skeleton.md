@@ -4,7 +4,7 @@
 **Epic:** Voice runtime
 **Estimated effort:** ~10 h
 **Depends on:** 26
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -101,46 +101,46 @@ started_at_ms, ended_at_ms, attributes, status`), `SpanRecorder` Protocol,
 
 ## Chips
 
-- [ ] **C1 - Control-channel schema.** Write
+- [x] **C1 - Control-channel schema.** Write
   `tests/test_transport_schema.py` first: round-trip every message type,
   reject unknown type, reject extra fields, version field present. Then
   implement `src/lucy/transport/{__init__.py,schema.py}`. Verify:
   `.venv/bin/python -m pytest tests/test_transport_schema.py -q` -> all
   pass (>=6 tests).
-- [ ] **C2 - Clock.** Test first in `tests/test_clock.py`:
+- [x] **C2 - Clock.** Test first in `tests/test_clock.py`:
   `ManualClock.advance` resolves a pending sleep without wall time; two
   sleeps resolve in order. Implement `src/lucy/clock.py`. Verify:
   `.venv/bin/python -m pytest tests/test_clock.py -q` -> all pass, total
   runtime < 1 s (proves no real sleeping).
-- [ ] **C3 - Typed budgets.** Test first in `tests/test_settings.py`: env
+- [x] **C3 - Typed budgets.** Test first in `tests/test_settings.py`: env
   var `LUCY_BUDGET_TURN_TOTAL_MS=500` overrides the default; defaults match
   the ADR 0011 table. Implement `src/lucy/settings.py` with
   `pydantic-settings`. Verify:
   `.venv/bin/python -m pytest tests/test_settings.py -q` -> all pass.
-- [ ] **C4 - Gateway simulator.** Test first in `tests/test_dev_gateway.py`:
+- [x] **C4 - Gateway simulator.** Test first in `tests/test_dev_gateway.py`:
   `booking_happy_path()` yields partials with rising stability then a final
   per caller turn; a `TtsSpeak` gets started/mark/finished playback events.
   Implement `src/lucy/transport/dev_gateway.py` paced via the injected
   clock. Verify: `.venv/bin/python -m pytest tests/test_dev_gateway.py -q`
   -> all pass.
-- [ ] **C5 - VoiceSession state machine.** Test first in
+- [x] **C5 - VoiceSession state machine.** Test first in
   `tests/test_voice_session.py`: happy turn walks IDLE -> LISTENING ->
   THINKING -> SPEAKING -> IDLE and yields one `TurnRecord` with a waterfall;
   barge-in during SPEAKING cancels the turn task (assert no orphan tasks via
   `asyncio.all_tasks()`), truncates by `mark_chars`, sets
   `interrupted=True`. Implement `src/lucy/session.py`. Verify:
   `.venv/bin/python -m pytest tests/test_voice_session.py -q` -> all pass.
-- [ ] **C6 - Span tree.** Test first in `tests/test_tracing.py`: one turn
+- [x] **C6 - Span tree.** Test first in `tests/test_tracing.py`: one turn
   emits session/turn spans with correct parent ids through an
   `InMemoryTraceExporter` (from `lucy.testing`). Implement
   `src/lucy/tracing.py` and wire emission in `VoiceSession`. Verify:
   `.venv/bin/python -m pytest tests/test_tracing.py -q` -> all pass.
-- [ ] **C7 - Harness end-to-end.** Test first in `tests/test_harness.py`:
+- [x] **C7 - Harness end-to-end.** Test first in `tests/test_harness.py`:
   `ConversationHarness.run(booking_happy_path(), canned_responder)` returns
   a transcript whose caller lines match the scenario and one waterfall per
   turn. Implement `src/lucy/harness.py`. Verify:
   `.venv/bin/python -m pytest tests/test_harness.py -q` -> all pass.
-- [ ] **C8 - Full suite + bookkeeping.** Run everything, fill "Improvements
+- [x] **C8 - Full suite + bookkeeping.** Run everything, fill "Improvements
   noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green.
 
@@ -159,13 +159,11 @@ started_at_ms, ended_at_ms, attributes, status`), `SpanRecorder` Protocol,
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_transport_schema.py tests/test_clock.py tests/test_settings.py tests/test_dev_gateway.py tests/test_voice_session.py tests/test_tracing.py tests/test_harness.py -q` -> all pass
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green, zero warnings
-      introduced (use Docker Compose `docker compose run --rm lucy-api
+- [x] `docker compose run --rm lucy-api pytest <the 7 card-32 test files> -q` -> 27 passed
+- [x] `docker compose run --rm lucy-api pytest -q` -> 180 passed, no new warnings (use Docker Compose `docker compose run --rm lucy-api
       pytest` when the daemon is available)
-- [ ] `grep -rn "sleep(0\.\|time.sleep" tests/test_voice_session.py
-      tests/test_dev_gateway.py` -> no real sleeps in timing tests
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] `grep -rn "sleep(0\.\|time.sleep" tests/test_voice_session.py tests/test_dev_gateway.py` -> no real sleeps
+- [x] Post-task audit done; reviewer roster run, follow-up card 63 raised
 
 ## Failure protocol
 
@@ -176,7 +174,59 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- The gateway's interruption trigger is a `barge_in_turns`/`vad_interrupt_turns`
+  constructor set, not a per-`SyntheticTurn` marker (evals.py was not modified,
+  per the primer's "reuse, do not redefine"). If scenario-declared interruptions
+  are wanted, extend `SyntheticTurn` in a later card - noted by test-auditor.
+- `_run_turn` sends its outbound `TtsSpeak` envelope with `seq=0, ts_ms=0`
+  placeholders; a real gateway enforcing monotonic `seq` will need the session
+  to track outbound sequence (card 33/34).
+- Follow-up card 63 raised: `ruff`/`mypy` are not runnable in the `lucy-api`
+  image, so the agents.md global DoD (ruff/format/mypy clean) cannot be
+  verified in Docker for any card. Process gap, not specific to this diff.
+
+## Review evidence
+
+Reviewed the card-32 working-tree diff (transport/, clock, settings, session,
+tracing, harness + their 7 test files). Models per policy: sonnet x3, haiku x1.
+
+- code-reviewer: FAIL -> PASS after fixes - [P1][code-001] `VadSpeechStart`
+  never handled (Spec requires it) and [P1][code-002] `tts_ms` corruption when a
+  barge-in lands during THINKING. Validated the gateway<->session no-deadlock
+  design; confirmed no audio bytes and budgets routed through LatencyBudgets.
+- test-auditor: PASS - two mutation probes proved the truncation and
+  orphan-task assertions non-tautological. [P2][test-201] THINKING-phase
+  interruption untested; [P3][test-202] empty-caller utterance untested.
+- docs-reviewer: FAIL -> PASS after fixes - [P1][spec-0032] same VadSpeechStart
+  gap + stale docstring. Confirmed ADR 0004 (no audio bytes), budget defaults,
+  span hierarchy.
+- simplicity-reviewer: PASS - [P3][simp-001] unused `SpanRecorder` Protocol,
+  [P3][simp-002] gateway `Clock` decorative + hardcoded pacing dup of a budget,
+  [P3][simp-003] outbound seq/ts_ms placeholders. Confirmed voice.py events,
+  LatencyWaterfall, observe.Tracer are reused, never redefined.
+- security-reviewer: NOT_APPLICABLE - no secrets, PII surface, MCP permission,
+  or curated public (`lucy.__all__`) change; spans route through lucy.observe's
+  existing redaction pass.
+
+Findings disposition:
+
+- [P1][code-001]/[P1][spec-0032] VadSpeechStart unhandled - fixed: a shared
+  `_interrupt` path handles BargeIn and VadSpeechStart during THINKING/SPEAKING;
+  session docstring updated; covered by
+  `test_thinking_phase_interruption_cancels_without_corrupting_waterfall`.
+- [P1][code-002] tts_ms corruption during THINKING - fixed: `_interrupt` only
+  computes tts_ms when `speak_started_ms` is set; the test asserts tts_ms == 0.
+- [P2][test-201] THINKING-phase test - fixed: added, plus a gateway
+  `vad_interrupt_turns` mode to drive it.
+- [P3][test-202] empty caller utterance - fixed: added
+  `test_empty_caller_utterance_yields_a_final_with_no_partials`.
+- [P3][simp-001] unused Protocol - fixed: removed.
+- [P3][simp-002] gateway pacing - fixed: increments now come from
+  `LatencyBudgets` and the base timestamp is seeded from the injected clock.
+- [P3][simp-003]/outbound seq placeholders - deferred to card 33/34 (noted above).
+- ruff/mypy-in-container process gap - follow-up card 63.
+
+Post-fix: `docker compose run --rm lucy-api pytest -q` -> 180 passed.
 
 ## Pending human testing
 
