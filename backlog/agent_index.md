@@ -92,4 +92,6 @@ provider behavior to make tests pass.
 - Improvements noticed during implementation are recorded and follow-up cards are
   created.
 - The task card is moved to `done/` or `need_human_testing/`.
-- A closing commit stages only task-related files by explicit path.
+- A closing commit lands immediately as part of the move to `done/`: one commit
+  per card, staging only that card's files by explicit path. Never leave a done
+  card uncommitted and never batch several cards into one commit.
