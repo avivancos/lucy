@@ -9,6 +9,13 @@ Before formal implementation work, list open work from `pending/` and
 explicit instruction on which task to attack. The only override is the user
 literally saying "ignore the backlog".
 
+Standing authorization (card 61): the dev-agent supervisor loop, when this
+repo is enrolled with `autonomy: sprint-order`, may select cards WITHOUT a
+per-card human instruction - but only in `sprints.md` order respecting its
+dependency notes. It parks at `need_human_testing`, parks on unresolved P0/P1
+review findings, and never pushes. Interactive sessions still follow the
+paragraph above.
+
 ## States
 
 ```text
@@ -27,6 +34,30 @@ Mandatory flow:
 pending -> in_progress -> done -> testing -> production
                           -> need_human_testing -> testing/production
 ```
+
+State moves prefer the orchestrator MCP when connected -
+`mcp__dev-agent-orchestrator__backlog_next` (pending -> in_progress) and
+`backlog_move` (everything else), which validate the move and notify the
+dashboard. Fallback when the server is not connected: `git mv` between state
+folders (the folder remains the source of truth either way).
+
+## Review gate (cards >= 61)
+
+Moving a card `in_progress -> done` requires recorded reviewer verdicts in the
+card's `## Review evidence` section (template: `_TEMPLATE.md`; enforced by
+`tests/test_backlog_contract.py`). The applicable reviewers live in
+`.claude/agents/` (see `CLAUDE.md` for the routing and model policy):
+
+- Always: `code-reviewer`, `test-auditor`, `simplicity-reviewer`.
+- When docs/ADRs/README were touched or could go stale: `docs-reviewer`.
+- When telemetry, secrets, MCP permissions, or public surface changed:
+  `security-reviewer` (record NOT_APPLICABLE with a reason otherwise).
+
+P0/P1 findings BLOCK the move to `done/` until fixed; P2/P3 need an explicit
+disposition (fixed, follow-up card raised, or rejected with rationale).
+Request reviews through the orchestrator (`request_review`,
+`request_test_audit`) when connected; otherwise spawn the `.claude/agents/`
+reviewers directly. Cards earlier than 61 predate the gate.
 
 ## Sprints
 

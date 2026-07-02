@@ -79,6 +79,22 @@ work beats fake completion.
 
 <!-- Fill during execution. Raise a follow-up card per item. -->
 
+## Review evidence
+
+<!-- Required before moving to done/ for cards >= 61 (review gate, card 61).
+One line per applicable reviewer with its verdict, then finding dispositions.
+P0/P1 findings block the move until fixed. -->
+
+- code-reviewer: PASS | FAIL - <report ref or summary>
+- test-auditor: PASS | FAIL - <report ref or summary>
+- docs-reviewer: PASS | FAIL - <report ref or summary>
+- simplicity-reviewer: PASS | FAIL - <report ref or summary>
+- security-reviewer: PASS | FAIL - <report ref or summary, or NOT_APPLICABLE with reason>
+
+Findings disposition:
+
+- [P0|P1|P2|P3][reviewer-NNN] finding - fixed | follow-up card NN | rejected: rationale
+
 ## Pending human testing
 
 <!-- Only if this card moves to need_human_testing/. -->
