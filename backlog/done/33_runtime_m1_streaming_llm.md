@@ -4,7 +4,7 @@
 **Epic:** Voice runtime
 **Estimated effort:** ~8 h
 **Depends on:** 32
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -154,7 +154,7 @@ src or tests.
 
 ## Chips
 
-- [ ] **C1 - LLM contract: events, request, resolution.** Write
+- [x] **C1 - LLM contract: events, request, resolution.** Write
   `tests/test_llm_stream.py` first:
   `test_stream_event_union_covers_five_event_types`,
   `test_llm_request_carries_cache_key_hint`,
@@ -163,7 +163,7 @@ src or tests.
   models, union, Protocol, and `resolve_llm` in `src/lucy/llm.py`. Verify:
   `.venv/bin/python -m pytest tests/test_llm_stream.py -q` -> all pass
   (>=3 tests).
-- [ ] **C2 - LocalLlmSimulator.** Tests first in
+- [x] **C2 - LocalLlmSimulator.** Tests first in
   `tests/test_llm_stream.py`:
   `test_simulator_streams_tokens_then_usage_then_end`,
   `test_simulator_paces_tokens_via_manual_clock_without_wall_time`,
@@ -171,7 +171,7 @@ src or tests.
   simulator in `src/lucy/llm.py`. Verify:
   `.venv/bin/python -m pytest tests/test_llm_stream.py -q` -> all pass,
   total runtime < 1 s (proves no real sleeping).
-- [ ] **C3 - OpenAI-compatible adapter vs local SSE server.** Tests first
+- [x] **C3 - OpenAI-compatible adapter vs local SSE server.** Tests first
   in `tests/test_llm_stream.py`:
   `test_adapter_parses_sse_tokens_and_usage`,
   `test_adapter_assembles_tool_call_deltas_into_ready`, driven by an
@@ -180,7 +180,7 @@ src or tests.
   0003). Implement `OpenAiCompatibleAdapter`; move `httpx` to runtime
   dependencies in `pyproject.toml`. Verify:
   `.venv/bin/python -m pytest tests/test_llm_stream.py -q` -> all pass.
-- [ ] **C4 - SentenceAssembler.** Write
+- [x] **C4 - SentenceAssembler.** Write
   `tests/test_sentence_assembler.py` first:
   `test_feed_flushes_clause_at_boundary_past_min_length`,
   `test_short_clause_stays_buffered_until_next_boundary`,
@@ -188,7 +188,7 @@ src or tests.
   constants in `src/lucy/speech.py`. Verify:
   `.venv/bin/python -m pytest tests/test_sentence_assembler.py -q` ->
   all pass.
-- [ ] **C5 - TtsPlanner.** Tests first in
+- [x] **C5 - TtsPlanner.** Tests first in
   `tests/test_sentence_assembler.py`:
   `test_planner_assigns_ordered_unique_utterance_ids`,
   `test_spoken_text_truncates_to_last_mark_chars_on_barge_in` (feed
@@ -196,7 +196,7 @@ src or tests.
   shapes). Implement `TtsPlanner` in `src/lucy/speech.py`. Verify:
   `.venv/bin/python -m pytest tests/test_sentence_assembler.py -q` ->
   all pass.
-- [ ] **C6 - CascadedTurnDriver.** Write `tests/test_cascaded_driver.py`
+- [x] **C6 - CascadedTurnDriver.** Write `tests/test_cascaded_driver.py`
   first: `test_first_tts_speak_before_stream_end_within_budget` (clock
   timestamp of the first `TtsSpeak` is earlier than `StreamEnd` and within
   `budgets.llm_first_clause_ms` of stream start; derive
@@ -206,7 +206,7 @@ src or tests.
   `src/lucy/drivers.py`. Verify:
   `.venv/bin/python -m pytest tests/test_cascaded_driver.py -q` -> all
   pass.
-- [ ] **C7 - VoiceSession and harness wiring.** Tests first in
+- [x] **C7 - VoiceSession and harness wiring.** Tests first in
   `tests/test_cascaded_driver.py`:
   `test_voice_session_with_driver_fills_llm_ms_and_cost` (rejects
   responder+driver together with `ValueError`),
@@ -216,7 +216,7 @@ src or tests.
   `src/lucy/harness.py`, and add `LlmPricing` to `src/lucy/settings.py`.
   Verify: `.venv/bin/python -m pytest tests/test_cascaded_driver.py -q`
   -> all pass.
-- [ ] **C8 - Full suite + bookkeeping.** Run everything, fill
+- [x] **C8 - Full suite + bookkeeping.** Run everything, fill
   "Improvements noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green.
 
@@ -249,21 +249,21 @@ src or tests.
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_llm_stream.py
+- [x] `.venv/bin/python -m pytest tests/test_llm_stream.py
       tests/test_sentence_assembler.py tests/test_cascaded_driver.py -q`
       -> all pass, including
       `test_first_tts_speak_before_stream_end_within_budget` and
       `test_harness_booking_happy_path_with_llm_simulator`
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green, zero warnings
+- [x] `.venv/bin/python -m pytest -q` -> full suite green, zero warnings
       introduced (use Docker Compose `docker compose run --rm lucy-api
       pytest` when the daemon is available)
-- [ ] `grep -rn "time.sleep\|sleep(0\." tests/test_llm_stream.py
+- [x] `grep -rn "time.sleep\|sleep(0\." tests/test_llm_stream.py
       tests/test_cascaded_driver.py` -> no matches (no real sleeps in
       timing tests)
-- [ ] `grep -rn "https://\|api\.openai\.com" src/lucy/llm.py
+- [x] `grep -rn "https://\|api\.openai\.com" src/lucy/llm.py
       src/lucy/drivers.py src/lucy/speech.py` -> no matches (no hardcoded
       endpoints)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
 
 ## Failure protocol
 
@@ -274,7 +274,54 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+All non-blocking findings from the review below are carried into card 64
+(runtime M1 hardening): fail-safe SSE parse (sec-001), multi-clause gateway
+playback + driver-mode barge-in truncation (code-001 residual, test-003),
+clock-tied billing assertion (test-001), empty-stream and error-finish
+coverage (test-004/005), a hang-proof `_drain` (test-006), and dropping
+`TtsPlanner.prefix` (simp-003).
+
+## Review evidence
+
+Five reviewers ran on the working-tree diff (roster + tiers per `CLAUDE.md`).
+Final suite after fixes: **210 passed** in Docker (`docker compose run --rm
+lucy-api pytest -q`); `tests/test_cascaded_driver.py` ran 8/8 three times with
+no order-dependent flakiness.
+
+- **code-reviewer** (sonnet) - **FAIL -> resolved.**
+  - `[P0] code-001` "multi-clause turn deadlocks the gateway" - **NOT
+    CONFIRMED on corrected code.** The reviewer reviewed a working tree that
+    contained an injected mutation dropping the mid-stream `assembler.feed`,
+    so the driver emitted **zero** clauses and the gateway blocked forever on
+    `_inbound.get()`. Restoring the flush fixes it. Verified empirically: a
+    3-clause single turn and a 2-clause x 2-turn scenario both complete with
+    correct transcripts (repro run in Docker). Locked in by two regression
+    tests (`test_driver_flushes_multiple_clauses_in_order`,
+    `test_harness_multi_clause_turn_completes_without_deadlock`). The real
+    residual - the simulator gateway plays back only the first clause's
+    utterance (benign for a clean turn; wrong only for a driver-mode barge-in
+    of a multi-clause turn, an untested non-M1 path) - is carried to card 64.
+  - `[P1] code-002` "DoD test hangs" - **RESOLVED** by restoring the flush
+    (208 -> 210 green).
+  - `[P2] code-003` "order-dependent flakiness" - **NOT REPRODUCED**;
+    `test_cascaded_driver.py` is 8/8 on three consecutive clean runs. The
+    reviewer's "FAILED [16%]" was captured mid-hang on the mutated tree.
+- **test-auditor** (sonnet) - **PASS.** No-mocks confirmed (real
+  `LocalLlmSimulator`, in-process ASGI SSE server, inline `LlmProvider`).
+  Mutation probes caught cost-arithmetic and flush regressions; the billing
+  and coverage gaps (test-001/003/004/005/006) are non-blocking -> card 64.
+- **simplicity-reviewer** (sonnet) - **PASS.** `_model_info` assignment
+  dropped to a bare fail-fast call (simp-002); `budgets` retained with a
+  documented card-34 purpose (simp-001); `TtsPlanner.prefix` removal
+  (simp-003) -> card 64. Reuse check clean.
+- **docs-reviewer** (sonnet) - **PASS.** Stale `session.py` module docstring
+  reworded to the responder/driver either-or (docs-001). ADR 0011 contract
+  text matches the built `Protocol` signatures.
+- **security-reviewer** (opus) - **PASS.** `api_key` only in the
+  `Authorization` header, never logged/in an exception/in a span; no URL
+  literals; message content never reaches telemetry; public `__all__`
+  unchanged; tool args carried but not executed in M1. Non-fail-safe SSE
+  `json.loads` (sec-001, P3) -> card 64.
 
 ## Pending human testing
 

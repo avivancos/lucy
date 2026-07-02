@@ -6,8 +6,8 @@ each turn as one cancellable asyncio task, cancels it on either a ``BargeIn``
 (caller interrupts the agent's speech) or a ``VadSpeechStart`` (caller starts
 talking again) during THINKING/SPEAKING - truncating the spoken text to what
 the caller actually heard - and finalizes a real :class:`LatencyWaterfall` per
-turn. In M0 the ``responder`` is a plain callable returning canned text; the
-streaming LLM driver replaces it in card 33.
+turn. Exactly one response path is wired: a ``responder`` (a plain callable
+returning canned text, M0) or a streaming-LLM ``driver`` (card 33) - never both.
 """
 
 from __future__ import annotations
@@ -18,8 +18,11 @@ from enum import Enum
 from typing import Awaitable, Callable, List, Optional
 
 from lucy.clock import Clock, MonotonicClock
+from lucy.drivers import TurnDriver, TurnDriverReport
+from lucy.llm import LlmMessage
 from lucy.metrics import CostBreakdown, LatencyWaterfall
 from lucy.settings import LatencyBudgets
+from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
     BargeIn,
@@ -34,6 +37,10 @@ from lucy.transport.schema import (
 )
 
 Responder = Callable[[str], Awaitable[str]]
+
+# Floor so a clock-measured turn duration always satisfies CostBreakdown's
+# billable_audio_minutes > 0 constraint (not a budget - a numerical guard).
+_MIN_BILLABLE_MINUTES = 1e-9
 
 
 class TurnState(str, Enum):
@@ -67,6 +74,9 @@ class _ActiveTurn:
     mark_chars: int = 0
     tts_ms: int = 0
     llm_ms: float = 0.0
+    llm_cost: float = 0.0
+    clock_start: float = 0.0
+    planner: Optional[TtsPlanner] = None  # set in driver mode
     task: "Optional[asyncio.Task[None]]" = None
     playback_finished: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -76,16 +86,20 @@ class VoiceSession:
         self,
         session_id: str,
         transport,
-        responder: Responder,
+        responder: Optional[Responder] = None,
         *,
+        driver: Optional[TurnDriver] = None,
         state_store=None,
         tracer=None,
         clock: Optional[Clock] = None,
         budgets: Optional[LatencyBudgets] = None,
     ) -> None:
+        if (responder is None) == (driver is None):
+            raise ValueError("exactly one of responder or driver must be set")
         self.session_id = session_id
         self.transport = transport
         self.responder = responder
+        self.driver = driver
         self.state_store = state_store
         self.tracer = tracer
         self.clock = clock or MonotonicClock()
@@ -93,6 +107,7 @@ class VoiceSession:
         self.state = TurnState.IDLE
         self.transitions: List[TurnState] = [TurnState.IDLE]
         self.spans: List[Span] = []
+        self._history: List[LlmMessage] = []
 
     def _set_state(self, state: TurnState) -> None:
         if state != self.state:
@@ -124,12 +139,16 @@ class VoiceSession:
                     stt_ms=payload.stt_ms,
                     stt_final_ms=ts,
                     started_ms=max(0, ts - payload.stt_ms),
+                    clock_start=self.clock.monotonic(),
                 )
                 self._set_state(TurnState.THINKING)
-                active.task = asyncio.create_task(self._run_turn(active))
+                turn_body = self._run_driver_turn if self.driver else self._run_turn
+                active.task = asyncio.create_task(turn_body(active))
 
             elif isinstance(payload, TtsPlayback) and active is not None:
                 active.mark_chars = max(active.mark_chars, payload.mark_chars)
+                if active.planner is not None:
+                    active.planner.record_playback(payload)
                 if payload.state == "started":
                     active.speak_started_ms = event.envelope.ts_ms
                     self._set_state(TurnState.SPEAKING)
@@ -138,7 +157,7 @@ class VoiceSession:
                     active.tts_ms = event.envelope.ts_ms - active.speak_started_ms
                     active.playback_finished.set()
                     await self._await_task(active)
-                    records.append(self._finalize(active, tree))
+                    self._complete(active, tree, records)
                     self._set_state(TurnState.IDLE)
                     active = None
 
@@ -157,7 +176,7 @@ class VoiceSession:
         if active is not None:
             active.ended_ms = active.ended_ms or last_ts
             await self._cancel_task(active)
-            records.append(self._finalize(active, tree))
+            self._complete(active, tree, records)
 
         tree.end_session(last_ts)
         tree.emit(self.tracer)
@@ -184,6 +203,32 @@ class VoiceSession:
         )
         await turn.playback_finished.wait()
 
+    async def _run_driver_turn(self, turn: _ActiveTurn) -> None:
+        assert self.driver is not None
+        turn.planner = TtsPlanner()
+        first_tts = True
+        async for event in self.driver.run_turn(turn.user_text, list(self._history)):
+            if isinstance(event, TtsSpeak):
+                turn.planner.register(event.utterance_id, event.text)
+                if first_tts:
+                    self._set_state(TurnState.SPEAKING)  # THINKING -> SPEAKING
+                    first_tts = False
+                await self.transport.send(
+                    Envelope(
+                        type="tts.speak",
+                        session_id=self.session_id,
+                        turn_id=turn.turn_id,
+                        seq=0,
+                        ts_ms=0,
+                    ),
+                    event,
+                )
+            elif isinstance(event, TurnDriverReport):
+                turn.assistant_text = event.assistant_text
+                turn.llm_ms = event.llm_ms
+                turn.llm_cost = event.llm_cost
+        await turn.playback_finished.wait()
+
     async def _interrupt(
         self,
         turn: _ActiveTurn,
@@ -199,8 +244,16 @@ class VoiceSession:
         if turn.speak_started_ms:
             turn.tts_ms = max(turn.tts_ms, ts_ms - turn.speak_started_ms)
         await self._cancel_task(turn)
-        records.append(self._finalize(turn, tree))
+        self._complete(turn, tree, records)
         self._set_state(TurnState.IDLE)
+
+    def _complete(
+        self, turn: _ActiveTurn, tree: TurnSpanTree, records: List[TurnRecord]
+    ) -> None:
+        record = self._finalize(turn, tree)
+        records.append(record)
+        self._history.append(LlmMessage(role="user", content=record.user_text))
+        self._history.append(LlmMessage(role="assistant", content=record.assistant_text))
 
     async def _await_task(self, turn: _ActiveTurn) -> None:
         if turn.task is not None:
@@ -216,9 +269,24 @@ class VoiceSession:
                 pass
 
     def _finalize(self, turn: _ActiveTurn, tree: TurnSpanTree) -> TurnRecord:
-        assistant_text = turn.assistant_text
-        if turn.interrupted:
-            assistant_text = assistant_text[: turn.mark_chars]
+        if turn.planner is not None:
+            # Driver mode: truncation goes through the planner, which reconstructs
+            # what was heard across all utterances of the turn.
+            assistant_text = (
+                turn.planner.spoken_text() if turn.interrupted else turn.assistant_text
+            )
+            duration_min = (self.clock.monotonic() - turn.clock_start) / 60.0
+            cost: Optional[CostBreakdown] = CostBreakdown(
+                llm_cost=turn.llm_cost,
+                billable_audio_minutes=max(duration_min, _MIN_BILLABLE_MINUTES),
+            )
+        else:
+            assistant_text = (
+                turn.assistant_text[: turn.mark_chars]
+                if turn.interrupted
+                else turn.assistant_text
+            )
+            cost = None
         waterfall = LatencyWaterfall(
             stt_ms=turn.stt_ms,
             rag_ms=0.0,
@@ -234,7 +302,7 @@ class VoiceSession:
             assistant_text=assistant_text,
             interrupted=turn.interrupted,
             waterfall=waterfall,
-            cost=None,
+            cost=cost,
         )
 
     def _record_spans(self, turn: _ActiveTurn, tree: TurnSpanTree) -> None:

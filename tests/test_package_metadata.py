@@ -25,12 +25,12 @@ def test_python_package_metadata_and_dependencies():
         "pydantic",
         "uvicorn",
         "opentelemetry-api",
+        "httpx",  # runtime dep since card 33 (the OpenAI-compatible LLM adapter)
     ]:
         assert dependency in dependencies
 
     dev_dependencies = "\n".join(project["optional-dependencies"]["dev"])
     assert "pytest" in dev_dependencies
-    assert "httpx" in dev_dependencies
 
     assert pyproject["tool"]["setuptools"]["packages"]["find"]["where"] == ["src"]
     assert pyproject["tool"]["pytest"]["ini_options"]["testpaths"] == ["tests"]

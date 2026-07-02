@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
 from lucy.clock import Clock, ManualClock
+from lucy.drivers import TurnDriver
 from lucy.evals import SyntheticCallScenario
 from lucy.metrics import LatencyWaterfall
 from lucy.session import Responder, TurnRecord, VoiceSession
@@ -35,8 +36,9 @@ class ConversationHarness:
     async def run(
         self,
         scenario: SyntheticCallScenario,
-        responder: Responder,
+        responder: Optional[Responder] = None,
         *,
+        driver: Optional[TurnDriver] = None,
         clock: Optional[Clock] = None,
         tracer=None,
         budgets: Optional[LatencyBudgets] = None,
@@ -53,6 +55,7 @@ class ConversationHarness:
             self.session_id,
             gateway,
             responder,
+            driver=driver,
             tracer=tracer,
             clock=clock,
             budgets=budgets,

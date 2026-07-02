@@ -22,3 +22,13 @@ class LatencyBudgets(BaseSettings):
     gateway_pacing_ms: int = 30  # gateway playback pacing granularity
     turn_total_ms: int = 800  # end-to-end p50 turn budget
     max_tool_rounds_per_turn: int = 3  # tool-call rounds before forcing a reply
+
+
+class LlmPricing(BaseSettings):
+    """Per-1k-token prices for cost accounting. Zero defaults - no invented
+    prices; override from the environment with the ``LUCY_LLM_PRICE_`` prefix."""
+
+    model_config = SettingsConfigDict(env_prefix="LUCY_LLM_PRICE_", extra="ignore")
+
+    prompt_per_1k: float = 0.0
+    completion_per_1k: float = 0.0

@@ -9,7 +9,7 @@ order unless the dependency notes say a sprint can start early.
 | --- | --- | --- | --- |
 | S0 Foundations | Docs | 17, 18, 19 | ADRs 0010/0011, telemetry wire spec, Apache-2.0 license shipped (done) |
 | S1 Open-core restructure | Packaging | 20, 21, 22, 23, 24, 25, 26, 27 | Quickstart runs with zero keys; pili and lucy-platform extracted; three clean git repos; full suite green |
-| S2 Voice runtime core | Runtime | 32, 33, 34 | Scripted call end-to-end: streaming LLM, mid-call MCP tool with filler, real per-turn LatencyWaterfall |
+| S2 Voice runtime core | Runtime | 32, 33, 34, 64 | Scripted call end-to-end: streaming LLM, mid-call MCP tool with filler, real per-turn LatencyWaterfall |
 | S3 Conversational correctness | Runtime | 35, 36, 31 | booking_interruption eval green; <800 ms p50 budget asserted with ManualClock; traces visible in `lucy dev` viewer |
 | S4 Graph and state | Runtime | 37, 39 | Prebuilt `booking_agent()` passes all six golden scenarios; kill/resume mid-call works |
 | S5 Native telephony | Telephony | 40, 41, 42, 43, 44, 45 | Real call softphone -> Asterisk -> Lucy locally; real PSTN call via CPaaS with a Spanish DID |
