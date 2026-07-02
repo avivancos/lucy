@@ -27,6 +27,7 @@ from lucy.transport.schema import (
     SttPartial,
     TtsSpeak,
     TtsPlayback,
+    TtsStreamEnd,
     VadSpeechStart,
 )
 
@@ -103,6 +104,10 @@ class LocalGatewaySimulator:
                     VadSpeechStart(at_ms=self._ts_ms),
                     turn_id=turn_id,
                 )
+                # Drain the cancelled turn's directives up to its stream-end
+                # barrier so nothing leaks into the next turn (card 64). The
+                # session guarantees the barrier even for a cancelled turn.
+                await self._collect_turn_directives()
                 continue
             async for event in self._agent_response(turn_id, interrupt=index in self.barge_in_turns):
                 yield event
@@ -128,47 +133,67 @@ class LocalGatewaySimulator:
             turn_id=turn_id,
         )
 
+    async def _collect_turn_directives(self) -> "list[TtsSpeak]":
+        """Drain the turn's downstream directives up to the ``TtsStreamEnd``
+        barrier the session sends exactly once per turn (card 64). Collecting
+        the whole utterance set first is what lets a multi-clause turn play
+        back deterministically and never leak clauses into the next turn."""
+        utterances: "list[TtsSpeak]" = []
+        while True:
+            _, directive = await self._inbound.get()
+            if isinstance(directive, TtsSpeak):
+                utterances.append(directive)
+            elif isinstance(directive, TtsStreamEnd):
+                return utterances
+            # other directives (e.g. future tts.cancel) don't end collection
+
+    def _playback(self, turn_id: str, utterance_id: str, state: str, mark_chars: int) -> ControlEvent:
+        self._ts_ms += self.budgets.gateway_pacing_ms
+        return self._emit(
+            "tts.playback",
+            TtsPlayback(utterance_id=utterance_id, state=state, mark_chars=mark_chars),
+            turn_id=turn_id,
+        )
+
     async def _agent_response(
         self, turn_id: str, *, interrupt: bool
     ) -> AsyncIterator[ControlEvent]:
-        # Wait for the session's TtsSpeak (queued by send() before it asks for
-        # the next event, so this resolves without deadlock).
-        _, directive = await self._inbound.get()
-        if not isinstance(directive, TtsSpeak):
+        # Collect every clause of the turn (the session's stream-end barrier
+        # bounds the wait, so this resolves without deadlock).
+        utterances = await self._collect_turn_directives()
+        if not utterances:
             return
-        utterance = directive.utterance_id
-        full = len(directive.text)
 
-        self._ts_ms += self.budgets.gateway_pacing_ms
-        yield self._emit(
-            "tts.playback",
-            TtsPlayback(utterance_id=utterance, state="started", mark_chars=0),
-            turn_id=turn_id,
-        )
+        # started for the first clause only; the session's SPEAKING transition
+        # and speak_started_ms key off this single event.
+        yield self._playback(turn_id, utterances[0].utterance_id, "started", 0)
+
         if interrupt:
-            heard = max(1, full // 2)
-            self._ts_ms += self.budgets.gateway_pacing_ms
-            yield self._emit(
-                "tts.playback",
-                TtsPlayback(utterance_id=utterance, state="mark", mark_chars=heard),
-                turn_id=turn_id,
-            )
+            # Barge-in cuts the LAST clause mid-utterance: earlier clauses were
+            # fully heard (finished), the last is truncated at its mark.
+            for utt in utterances[:-1]:
+                yield self._playback(turn_id, utt.utterance_id, "mark", len(utt.text))
+                yield self._playback(
+                    turn_id, utt.utterance_id, "finished", len(utt.text)
+                )
+            last = utterances[-1]
+            heard = max(1, len(last.text) // 2)
+            yield self._playback(turn_id, last.utterance_id, "mark", heard)
             self._ts_ms += self.budgets.gateway_pacing_ms
             yield self._emit(
                 "barge_in",
-                BargeIn(at_ms=self._ts_ms, during="speaking", utterance_id=utterance),
+                BargeIn(
+                    at_ms=self._ts_ms,
+                    during="speaking",
+                    utterance_id=last.utterance_id,
+                ),
                 turn_id=turn_id,
             )
             return
-        self._ts_ms += self.budgets.gateway_pacing_ms
-        yield self._emit(
-            "tts.playback",
-            TtsPlayback(utterance_id=utterance, state="mark", mark_chars=full),
-            turn_id=turn_id,
-        )
-        self._ts_ms += self.budgets.gateway_pacing_ms
-        yield self._emit(
-            "tts.playback",
-            TtsPlayback(utterance_id=utterance, state="finished", mark_chars=full),
-            turn_id=turn_id,
-        )
+
+        # Clean playback: a mark per clause, one terminal finished after the
+        # last (the session completes the turn on the last utterance only).
+        for utt in utterances:
+            yield self._playback(turn_id, utt.utterance_id, "mark", len(utt.text))
+        last = utterances[-1]
+        yield self._playback(turn_id, last.utterance_id, "finished", len(last.text))

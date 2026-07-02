@@ -9,11 +9,13 @@ from lucy.transport.schema import (
     SttPartial,
     TtsPlayback,
     TtsSpeak,
+    TtsStreamEnd,
 )
 
 
 async def _drive(gw, response="Happy to help"):
-    """Consume the gateway, answering each SttFinal with a TtsSpeak (as a session would)."""
+    """Consume the gateway, answering each SttFinal with a TtsSpeak followed by
+    the per-turn stream-end barrier (exactly as a VoiceSession does, card 64)."""
     events = []
     async for event in gw.events():
         events.append(event)
@@ -25,6 +27,10 @@ async def _drive(gw, response="Happy to help"):
                     text=response,
                     flush=False,
                 ),
+            )
+            await gw.send(
+                Envelope(type="tts.stream_end", session_id="s", seq=0, ts_ms=0),
+                TtsStreamEnd(),
             )
     return events
 
@@ -96,3 +102,44 @@ async def test_barge_in_turn_emits_barge_in_and_no_finished():
     t0_playback_states = [p.state for p in t0 if isinstance(p, TtsPlayback)]
     assert "started" in t0_playback_states
     assert "finished" not in t0_playback_states  # the utterance was cut off
+
+
+async def test_multi_clause_turn_plays_every_clause_with_one_terminal_finished():
+    # card 64: N clauses -> started once (first clause), a mark per clause in
+    # order, and exactly ONE terminal finished carrying the last clause.
+    from lucy.evals import SyntheticCallScenario, SyntheticTurn
+
+    scenario = SyntheticCallScenario(
+        name="one_turn",
+        objective="multi-clause playback",
+        turns=[SyntheticTurn(speaker="caller", text="hi")],
+        expected_outcome="booked",
+    )
+    gw = LocalGatewaySimulator(scenario, ManualClock())
+    clauses = ["First clause.", "Second one?", "Third."]
+
+    events = []
+    async for event in gw.events():
+        events.append(event)
+        if isinstance(event.payload, SttFinal):
+            for i, text in enumerate(clauses):
+                await gw.send(
+                    Envelope(type="tts.speak", session_id="s", seq=0, ts_ms=0),
+                    TtsSpeak(utterance_id="u%d" % i, text=text, flush=True),
+                )
+            await gw.send(
+                Envelope(type="tts.stream_end", session_id="s", seq=0, ts_ms=0),
+                TtsStreamEnd(),
+            )
+
+    playback = [e.payload for e in events if isinstance(e.payload, TtsPlayback)]
+    assert [p.state for p in playback] == ["started", "mark", "mark", "mark", "finished"]
+    assert playback[0].utterance_id == "u0"
+    marks = [p for p in playback if p.state == "mark"]
+    assert [(m.utterance_id, m.mark_chars) for m in marks] == [
+        ("u0", len(clauses[0])),
+        ("u1", len(clauses[1])),
+        ("u2", len(clauses[2])),
+    ]
+    terminal = playback[-1]
+    assert terminal.utterance_id == "u2" and terminal.mark_chars == len(clauses[2])

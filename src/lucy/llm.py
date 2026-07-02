@@ -197,6 +197,7 @@ class OpenAiCompatibleAdapter:
         tool_args: Dict[int, Dict[str, str]] = {}
         finish_reason: Optional[str] = None
         usage: Optional[UsageReport] = None
+        malformed = False
         try:
             async with client.stream(
                 "POST",
@@ -211,30 +212,62 @@ class OpenAiCompatibleAdapter:
                     data = line[len("data:") :].strip()
                     if data == "[DONE]":
                         break
-                    chunk = json.loads(data)
-                    raw_usage = chunk.get("usage")
-                    if raw_usage:
-                        usage = _usage_from(raw_usage)
-                    for choice in chunk.get("choices") or []:
-                        delta = choice.get("delta") or {}
-                        content = delta.get("content")
-                        if content:
-                            yield TokenDelta(text=content)
-                        for call in delta.get("tool_calls") or []:
-                            async for event in self._tool_delta(call, tool_args):
-                                yield event
-                        if choice.get("finish_reason"):
-                            finish_reason = choice["finish_reason"]
+                    try:
+                        # The whole chunk is untrusted upstream output: a bad
+                        # frame OR a bad field shape (non-object chunk, non-int
+                        # usage counts or tool index, non-str content) fails
+                        # safe - terminate with a typed error StreamEnd, never
+                        # crash the turn.
+                        chunk = json.loads(data)
+                        raw_usage = chunk.get("usage")
+                        if raw_usage:
+                            usage = _usage_from(raw_usage)
+                        for choice in chunk.get("choices") or []:
+                            delta = choice.get("delta") or {}
+                            content = delta.get("content")
+                            if content:
+                                if not isinstance(content, str):
+                                    raise ValueError("non-string content delta")
+                                yield TokenDelta(text=content)
+                            for call in delta.get("tool_calls") or []:
+                                async for event in self._tool_delta(
+                                    call, tool_args
+                                ):
+                                    yield event
+                            if choice.get("finish_reason"):
+                                finish_reason = choice["finish_reason"]
+                    except (
+                        json.JSONDecodeError,
+                        TypeError,
+                        ValueError,
+                        AttributeError,
+                    ):
+                        malformed = True
+                        break
         finally:
             if owns_client:
                 await client.aclose()
 
+        if malformed:
+            yield StreamEnd(finish_reason="error")
+            return
         if finish_reason == "tool_calls":
             for state in tool_args.values():
+                try:
+                    arguments = json.loads(state["args"] or "{}")
+                except json.JSONDecodeError:
+                    # Assembled tool arguments are upstream data too: same
+                    # fail-safe termination, no partial ToolCallReady.
+                    yield StreamEnd(finish_reason="error")
+                    return
+                if not isinstance(arguments, dict):
+                    # Valid JSON but not an object: still upstream garbage.
+                    yield StreamEnd(finish_reason="error")
+                    return
                 yield ToolCallReady(
                     call_id=state["call_id"],
                     name=state["name"],
-                    arguments=json.loads(state["args"] or "{}"),
+                    arguments=arguments,
                 )
         if usage is not None:
             yield usage

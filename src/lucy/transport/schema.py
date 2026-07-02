@@ -106,6 +106,14 @@ class TtsCancel(_Strict):
     utterance_id: str  # a specific utterance, or the literal "all"
 
 
+class TtsStreamEnd(_Strict):
+    """No more ``tts.speak`` directives follow for the current turn - the
+    agent's speech stream is complete or was cancelled. Sent exactly once per
+    turn; the dev gateway uses it as the deterministic turn barrier when
+    echoing playback (card 64). A real media plane derives the same boundary
+    from its own playout queue."""
+
+
 class DtmfSend(_Strict):
     digits: str
 
@@ -135,6 +143,7 @@ DOWNSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "session.configure": SessionConfigure,
     "tts.speak": TtsSpeak,
     "tts.cancel": TtsCancel,
+    "tts.stream_end": TtsStreamEnd,
     "dtmf.send": DtmfSend,
     "transfer": Transfer,
     "session.end": SessionEnd,

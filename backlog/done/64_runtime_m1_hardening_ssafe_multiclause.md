@@ -101,19 +101,19 @@ Read, in this order, before writing anything:
 
 ## Chips
 
-- [ ] **C1 - fail-safe SSE parse.** Files: `src/lucy/llm.py`,
+- [x] **C1 - fail-safe SSE parse.** Files: `src/lucy/llm.py`,
   `tests/test_llm_stream.py`. Test first:
   `test_adapter_emits_error_finish_on_malformed_sse_line` (in-test server
   sends a `data:` line that is not valid JSON; assert the stream ends with
   `StreamEnd(finish_reason="error")` and no crash). Verify:
   `docker compose run --rm lucy-api pytest tests/test_llm_stream.py -q` ->
   all pass, includes the new test.
-- [ ] **C2 - empty stream.** Files: `src/lucy/llm.py` (if needed),
+- [x] **C2 - empty stream.** Files: `src/lucy/llm.py` (if needed),
   `tests/test_llm_stream.py`, `tests/test_cascaded_driver.py`. Test first:
   `test_empty_stream_yields_no_tts_speak_and_empty_report`. Verify:
   `docker compose run --rm lucy-api pytest tests/test_llm_stream.py
   tests/test_cascaded_driver.py -q` -> all pass.
-- [ ] **C3 - multi-clause playback + barge-in truncation.** Files:
+- [x] **C3 - multi-clause playback + barge-in truncation.** Files:
   `src/lucy/transport/dev_gateway.py`, `tests/test_cascaded_driver.py`. Test
   first: `test_driver_turn_barge_in_truncates_multi_clause_via_planner`
   (two-clause turn, caller barges in during the second clause; assert the
@@ -121,13 +121,13 @@ Read, in this order, before writing anything:
   via `TtsPlanner.spoken_text()`). Verify:
   `docker compose run --rm lucy-api pytest tests/test_cascaded_driver.py -q`
   -> all pass.
-- [ ] **C4 - clock-tied billing + hang-proof drain + drop prefix.** Files:
+- [x] **C4 - clock-tied billing + hang-proof drain + drop prefix.** Files:
   `tests/test_cascaded_driver.py`, `src/lucy/speech.py`. Tests first:
   `test_billable_minutes_track_clock_duration`, and make `_drain` raise on
   step exhaustion. Verify:
   `docker compose run --rm lucy-api pytest tests/test_cascaded_driver.py
   tests/test_sentence_assembler.py -q` -> all pass.
-- [ ] **C5 - full suite + card bookkeeping.** Run the whole suite, fill
+- [x] **C5 - full suite + card bookkeeping.** Run the whole suite, fill
   "Improvements noted", record `## Review evidence`, move this card to
   `done/`. Verify: `docker compose run --rm lucy-api pytest -q` -> full
   suite green.
@@ -150,15 +150,15 @@ Read, in this order, before writing anything:
 
 ## Definition of Done
 
-- [ ] `docker compose run --rm lucy-api pytest tests/test_llm_stream.py
+- [x] `docker compose run --rm lucy-api pytest tests/test_llm_stream.py
       tests/test_sentence_assembler.py tests/test_cascaded_driver.py -q` ->
       all pass, including the malformed-SSE, empty-stream, and multi-clause
       barge-in tests
-- [ ] `docker compose run --rm lucy-api pytest -q` -> full suite green, no
+- [x] `docker compose run --rm lucy-api pytest -q` -> full suite green, no
       new warnings
-- [ ] `grep -rn "json.loads" src/lucy/llm.py` -> every call is inside a
+- [x] `grep -rn "json.loads" src/lucy/llm.py` -> every call is inside a
       guarded block that ends the stream with `finish_reason="error"`
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
 
 ## Failure protocol
 
@@ -168,5 +168,78 @@ document what happened under "Improvements noted", and report. Partial honest
 work beats fake completion.
 
 ## Improvements noted
+
+- Control-schema extension (recorded per Spec item 2): new downstream type
+  `TtsStreamEnd` / `"tts.stream_end"` in `src/lucy/transport/schema.py` - "no
+  more tts.speak directives this turn". The session sends it EXACTLY once per
+  turn (both responder and driver modes, normal or cancelled paths); the dev
+  gateway uses it as the deterministic turn barrier when echoing playback. A
+  real media plane derives the same boundary from its own playout queue.
+- File scope widened (same rationale class as card 34): `src/lucy/session.py`
+  (barrier send in both turn bodies' `finally` + `_ActiveTurn.barrier_sent`
+  exactly-once flag + `_interrupt` fallback send + terminal-finished guard via
+  `TtsPlanner.is_last`), `src/lucy/transport/schema.py` (the extension above),
+  and `tests/test_dev_gateway.py` (its `_drive` helper plays the session's
+  role, so it must send the barrier too or its tests deadlock).
+- Subtle asyncio edge covered: a turn task cancelled before its first
+  scheduling never executes its `finally`, so the session's `_interrupt` is
+  the fallback barrier sender - without it the gateway drain deadlocks on
+  vad-interrupt turns.
+- Gateway playback semantics for multi-clause turns: `started` once (first
+  clause), `mark` per clause, ONE terminal `finished` (last clause); the
+  session completes the turn only on the last utterance's finished. Barge-in
+  cuts the LAST clause at its mark; earlier clauses report `finished` so
+  `TtsPlanner.spoken_text()` reconstructs exactly what was heard.
+- Stress: driver+gateway+session+realtime-tools suites 10/10 green; full
+  suite 239 passed after review fixes, zero new warnings.
+- Follow-up seed for card 35: `BargeInPolicy.on_barge_in` enforcement will
+  interact with the new barrier protocol (a cancelled tool round must still
+  reach the exactly-once stream-end path); noted for card 35's spec.
+
+## Review evidence
+
+Five-reviewer roster + adversarial verification of every P0-P2 finding
+(roster + tiers per `CLAUDE.md`). The verifiers reproduced each confirmed
+finding empirically in Docker before it was accepted. Final: 239 passed;
+`mcp.py` byte-identical (`3906e485c0b5078f448b85614f7cbb29e8ef02ce`);
+fixed suites 10/10 stress-green.
+
+- **code-reviewer** (sonnet) - **FAIL -> resolved.** `[P1] code-001`
+  (verifier-adjusted from P0): a zero-clause driver turn mid-session had no
+  playback at all, so its task blocked forever on `playback_finished` and the
+  next `SttFinal` silently overwrote it - record dropped, task leaked
+  (reproduced: 1 record instead of 2, one permanently-pending task). FIXED:
+  the `SttFinal` handler now reaps and records a still-active previous turn
+  before starting the next; regression test
+  `test_empty_driver_turn_mid_session_is_recorded_not_leaked` asserts both
+  records and the full transcript. Barrier exactly-once analysis (normal,
+  cancel-mid-stream, cancel-before-first-run, cancel-during-playback) held.
+- **test-auditor** (sonnet) - **FAIL -> resolved.** `[P1] test-001`: C2's
+  empty-stream test stopped at the driver seam, which is exactly why code-001
+  shipped green - fixed by the session-level test above. `[P2] test-101`:
+  the clean multi-clause playback path had no gateway-level event-sequence
+  test - FIXED with
+  `test_multi_clause_turn_plays_every_clause_with_one_terminal_finished`
+  (started once, ordered marks, single terminal finished).
+- **simplicity-reviewer** (sonnet) - **PASS.** Barrier protocol judged the
+  smallest deterministic design; `TtsStreamEnd` minimal (zero fields); no
+  dead `prefix` references.
+- **docs-reviewer** (haiku) - **PASS.** Both stale-docstring findings were
+  REFUTED on verification; Improvements noted records the schema extension
+  and scope widenings as Spec item 2 requires; no ADR 0011 contradiction.
+- **security-reviewer** (opus) - **FAIL -> resolved.** `[P1] sec-002` and
+  `[P2] sec-001`: unguarded `int()` casts on untrusted upstream fields
+  (`usage.prompt_tokens="NaN"`, `tool_call index="oops"`) crashed the turn
+  with `ValueError`, re-opening the DoS-per-turn class this card closes
+  (reproduced in Docker). FIXED: the whole per-chunk parse is now inside the
+  fail-safe guard (JSONDecodeError/TypeError/ValueError/AttributeError ->
+  `StreamEnd(finish_reason="error")`), non-string content deltas and
+  non-object chunks/tool-arguments included; four new adversarial tests
+  cover each shape. Confirmed clean: `TtsStreamEnd` adds no attack surface
+  (extra="forbid", zero fields), `mcp.py` byte-identical, api_key handling
+  untouched.
+- Housekeeping: three probe scripts left behind by review agents
+  (`probe_single.py`, `test_probe2.py`, `test_probe_empty.py`) were removed
+  before commit.
 
 <!-- Fill during execution. Raise a follow-up card per item. -->

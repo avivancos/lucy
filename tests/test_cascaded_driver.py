@@ -26,6 +26,17 @@ async def _drain(clock: ManualClock, task, step_ms: float, max_steps: int = 80):
         await asyncio.sleep(0)
         clock.advance(step_ms)
         await asyncio.sleep(0)
+    if not task.done():
+        # Hang-proof (card 64): a stuck task fails fast with a diagnosis
+        # instead of hanging CI on an unbounded await.
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        raise AssertionError(
+            "task did not complete within %d drain steps (deadlock?)" % max_steps
+        )
     await task
 
 
@@ -234,3 +245,143 @@ async def test_harness_booking_happy_path_with_llm_simulator():
     assert all(r.waterfall.llm_ms > 0 for r in result.turn_records)
     assert all(r.cost is not None and r.cost.billable_audio_minutes > 0 for r in result.turn_records)
     assert result.turn_records[0].cost.llm_cost == pytest.approx(4 / 1000 * 0.02)
+
+
+# -- card 64: empty stream through the driver ---------------------------------
+
+
+async def test_empty_stream_yields_no_tts_speak_and_empty_report():
+    clock = ManualClock()
+    sim = LocalLlmSimulator(
+        [ScriptedLlmTurn(tokens=[], usage=UsageReport(1, 0))], clock, token_interval_ms=0
+    )
+    driver = _driver(clock, sim, LatencyBudgets(), min_flush_chars=1)
+
+    events = [e async for e in driver.run_turn("hi", [])]
+
+    assert [e for e in events if isinstance(e, TtsSpeak)] == []
+    report = next(e for e in events if isinstance(e, TurnDriverReport))
+    assert report.assistant_text == ""
+    assert report.usage == UsageReport(1, 0)
+
+
+# -- card 64: multi-clause barge-in truncation + clock-tied billing -----------
+
+
+def _one_turn_scenario():
+    return SyntheticCallScenario(
+        name="one_turn",
+        objective="single caller turn",
+        turns=[SyntheticTurn(speaker="caller", text="hello there")],
+        expected_outcome="booked",
+    )
+
+
+async def test_driver_turn_barge_in_truncates_multi_clause_via_planner():
+    budgets = LatencyBudgets()
+    clock = ManualClock()
+    sim = LocalLlmSimulator(
+        [ScriptedLlmTurn(
+            tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
+            usage=UsageReport(10, 4),
+        )],
+        clock,
+        token_interval_ms=budgets.llm_first_clause_ms / 10,
+    )
+    driver = _driver(clock, sim, budgets, min_flush_chars=8)
+
+    task = asyncio.create_task(
+        ConversationHarness().run(
+            _one_turn_scenario(), None, clock=clock, driver=driver, barge_in_turns={0}
+        )
+    )
+    await _drain(clock, task, budgets.llm_first_clause_ms / 10, max_steps=400)
+    record = task.result().turn_records[0]
+
+    assert record.interrupted is True
+    # First clause fully heard; the second cut at its playback mark
+    # ("Anything else?" is 14 chars -> heard = 7 -> "Anythin").
+    assert record.assistant_text == "Happy to help. Anythin"
+
+
+async def test_billable_minutes_track_clock_duration():
+    # Billing must derive from the injected clock: a longer scripted turn
+    # yields strictly more billable minutes (a hardcoded value would be equal).
+    budgets = LatencyBudgets()
+    interval_ms = budgets.llm_first_clause_ms / 10
+    clock = ManualClock()
+    sim = LocalLlmSimulator(
+        [
+            ScriptedLlmTurn(tokens=["Hi."], usage=UsageReport(1, 1)),
+            ScriptedLlmTurn(
+                tokens=["One ", "two ", "three ", "four ", "five ", "six ", "done."],
+                usage=UsageReport(1, 7),
+            ),
+        ],
+        clock,
+        token_interval_ms=interval_ms,
+    )
+    driver = _driver(clock, sim, budgets, min_flush_chars=1)
+    scenario = SyntheticCallScenario(
+        name="two_turns",
+        objective="two caller turns of different lengths",
+        turns=[
+            SyntheticTurn(speaker="caller", text="hi"),
+            SyntheticTurn(speaker="agent", text="ignored"),
+            SyntheticTurn(speaker="caller", text="count for me"),
+        ],
+        expected_outcome="booked",
+    )
+
+    task = asyncio.create_task(
+        ConversationHarness().run(scenario, None, clock=clock, driver=driver)
+    )
+    await _drain(clock, task, interval_ms, max_steps=400)
+    records = task.result().turn_records
+
+    short_min = records[0].cost.billable_audio_minutes
+    long_min = records[1].cost.billable_audio_minutes
+    assert short_min >= (interval_ms / 60000.0) - 1e-12  # at least one token pace
+    assert long_min > short_min  # clock-derived, not a constant
+
+
+async def test_empty_driver_turn_mid_session_is_recorded_not_leaked():
+    # code-001: a zero-clause driver reply mid-session has no playback at all;
+    # the session must still record it and start the next turn cleanly instead
+    # of dropping the record and leaking the blocked turn task.
+    budgets = LatencyBudgets()
+    interval = budgets.llm_first_clause_ms / 10
+    clock = ManualClock()
+    sim = LocalLlmSimulator(
+        [
+            ScriptedLlmTurn(tokens=[], usage=UsageReport(1, 0)),  # empty reply
+            ScriptedLlmTurn(tokens=["Hello ", "there."], usage=UsageReport(1, 2)),
+        ],
+        clock,
+        token_interval_ms=interval,
+    )
+    driver = _driver(clock, sim, budgets, min_flush_chars=1)
+    scenario = SyntheticCallScenario(
+        name="empty_then_normal",
+        objective="an empty agent reply must not swallow the turn",
+        turns=[
+            SyntheticTurn(speaker="caller", text="one"),
+            SyntheticTurn(speaker="agent", text="ignored"),
+            SyntheticTurn(speaker="caller", text="two"),
+        ],
+        expected_outcome="booked",
+    )
+
+    task = asyncio.create_task(
+        ConversationHarness().run(scenario, None, clock=clock, driver=driver)
+    )
+    await _drain(clock, task, interval, max_steps=400)
+    result = task.result()
+
+    assert result.transcript == [
+        ("caller", "one"),
+        ("agent", ""),
+        ("caller", "two"),
+        ("agent", "Hello there."),
+    ]
+    assert len(result.turn_records) == 2  # nothing dropped, nothing leaked

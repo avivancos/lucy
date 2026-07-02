@@ -252,3 +252,102 @@ async def test_adapter_assembles_tool_call_deltas_into_ready():
     assert ready.name == "book_meeting"
     assert ready.arguments == {"day": "Tue"}
     assert events[-1] == StreamEnd(finish_reason="tool_calls")
+
+
+# -- card 64: fail-safe SSE + empty stream ------------------------------------
+
+
+def _raw_sse_app(lines: list[str]):
+    """SSE server emitting raw lines verbatim - can speak malformed frames."""
+    app = FastAPI()
+
+    @app.post("/v1/chat/completions")
+    async def chat(_request: Request) -> StreamingResponse:
+        async def body():
+            for line in lines:
+                yield "data: %s\n\n" % line
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    return app
+
+
+async def test_adapter_emits_error_finish_on_malformed_sse_line():
+    events = await _collect(
+        _raw_sse_app(
+            [
+                json.dumps({"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]}),
+                "{not valid json",  # hostile/buggy upstream frame
+                json.dumps({"choices": [{"delta": {"content": "lost"}, "finish_reason": "stop"}]}),
+                "[DONE]",
+            ]
+        )
+    )
+    # tokens before the malformed line survive; nothing after it is emitted
+    assert [e.text for e in events if isinstance(e, TokenDelta)] == ["Hi"]
+    assert events[-1] == StreamEnd(finish_reason="error")
+
+
+async def test_adapter_emits_error_finish_on_malformed_tool_arguments():
+    events = await _collect(
+        _sse_app(
+            [
+                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "book", "arguments": "{broken"}}]}, "finish_reason": None}]},
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        )
+    )
+    assert not any(isinstance(e, ToolCallReady) for e in events)
+    assert events[-1] == StreamEnd(finish_reason="error")
+
+
+async def test_adapter_empty_stream_yields_clean_stop():
+    events = await _collect(_sse_app([]))  # zero content chunks before [DONE]
+    assert events == [StreamEnd(finish_reason="stop")]
+
+
+async def test_adapter_emits_error_finish_on_malformed_usage_fields():
+    # sec-001: non-numeric usage fields from a hostile/buggy endpoint must
+    # terminate fail-safe, not raise ValueError out of stream_chat.
+    events = await _collect(
+        _sse_app(
+            [
+                {"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]},
+                {"choices": [], "usage": {"prompt_tokens": "NaN", "completion_tokens": 2}},
+            ]
+        )
+    )
+    assert [e.text for e in events if isinstance(e, TokenDelta)] == ["Hi"]
+    assert events[-1] == StreamEnd(finish_reason="error")
+
+
+async def test_adapter_emits_error_finish_on_malformed_tool_index():
+    # sec-002: a non-integer tool_call index must not crash the turn.
+    events = await _collect(
+        _sse_app(
+            [
+                {"choices": [{"delta": {"tool_calls": [{"index": "oops", "id": "c1", "function": {"name": "book", "arguments": "{}"}}]}, "finish_reason": None}]},
+            ]
+        )
+    )
+    assert events[-1] == StreamEnd(finish_reason="error")
+
+
+async def test_adapter_emits_error_finish_on_non_object_chunk():
+    # valid JSON that is not an object (chunk.get would raise) is malformed
+    events = await _collect(_raw_sse_app(["[1, 2, 3]", "[DONE]"]))
+    assert events[-1] == StreamEnd(finish_reason="error")
+
+
+async def test_adapter_emits_error_finish_on_non_object_tool_arguments():
+    # tool arguments must decode to a dict; "[1, 2]" is upstream garbage
+    events = await _collect(
+        _sse_app(
+            [
+                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "book", "arguments": "[1, 2]"}}]}, "finish_reason": None}]},
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        )
+    )
+    assert not any(isinstance(e, ToolCallReady) for e in events)
+    assert events[-1] == StreamEnd(finish_reason="error")

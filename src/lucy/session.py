@@ -33,6 +33,7 @@ from lucy.transport.schema import (
     SttPartial,
     TtsPlayback,
     TtsSpeak,
+    TtsStreamEnd,
     VadSpeechStart,
 )
 
@@ -77,6 +78,7 @@ class _ActiveTurn:
     llm_cost: float = 0.0
     mcp_tools_ms: float = 0.0
     clock_start: float = 0.0
+    barrier_sent: bool = False  # tts.stream_end sent exactly once per turn
     planner: Optional[TtsPlanner] = None  # set in driver mode
     task: "Optional[asyncio.Task[None]]" = None
     playback_finished: asyncio.Event = field(default_factory=asyncio.Event)
@@ -133,6 +135,14 @@ class VoiceSession:
                 self._set_state(TurnState.LISTENING)
 
             elif isinstance(payload, SttFinal):
+                if active is not None:
+                    # A turn with no playback at all (e.g. a zero-clause driver
+                    # reply) never sees a terminal finished event: reap and
+                    # record it before starting the next turn - a turn is never
+                    # dropped and its task never leaks (card 64).
+                    active.ended_ms = active.ended_ms or event.envelope.ts_ms
+                    await self._cancel_task(active)
+                    self._complete(active, tree, records)
                 ts = event.envelope.ts_ms
                 active = _ActiveTurn(
                     turn_id=event.envelope.turn_id or "turn",
@@ -154,13 +164,21 @@ class VoiceSession:
                     active.speak_started_ms = event.envelope.ts_ms
                     self._set_state(TurnState.SPEAKING)
                 elif payload.state == "finished":
-                    active.ended_ms = event.envelope.ts_ms
-                    active.tts_ms = event.envelope.ts_ms - active.speak_started_ms
-                    active.playback_finished.set()
-                    await self._await_task(active)
-                    self._complete(active, tree, records)
-                    self._set_state(TurnState.IDLE)
-                    active = None
+                    # Multi-clause turns (card 64): only the LAST registered
+                    # utterance's finished playback ends the turn; earlier
+                    # clauses' finishes are recorded (above) but not terminal.
+                    if active.planner is None or active.planner.is_last(
+                        payload.utterance_id
+                    ):
+                        active.ended_ms = event.envelope.ts_ms
+                        active.tts_ms = (
+                            event.envelope.ts_ms - active.speak_started_ms
+                        )
+                        active.playback_finished.set()
+                        await self._await_task(active)
+                        self._complete(active, tree, records)
+                        self._set_state(TurnState.IDLE)
+                        active = None
 
             elif isinstance(payload, (BargeIn, VadSpeechStart)) and active is not None:
                 # Both interrupt an in-flight turn: BargeIn = caller talks over the
@@ -184,51 +202,77 @@ class VoiceSession:
         self.spans = list(tree.spans)
         return records
 
-    async def _run_turn(self, turn: _ActiveTurn) -> None:
-        llm_start = self.clock.monotonic()
-        turn.assistant_text = await self.responder(turn.user_text)
-        turn.llm_ms = (self.clock.monotonic() - llm_start) * 1000
+    async def _send_stream_end(self, turn: _ActiveTurn) -> None:
+        """End-of-speech barrier: exactly once per turn, on every path (normal
+        completion or cancellation), so the gateway simulator can drain the
+        turn's directives deterministically (card 64)."""
+        if turn.barrier_sent:
+            return
+        turn.barrier_sent = True
         await self.transport.send(
             Envelope(
-                type="tts.speak",
+                type="tts.stream_end",
                 session_id=self.session_id,
                 turn_id=turn.turn_id,
                 seq=0,
                 ts_ms=0,
             ),
-            TtsSpeak(
-                utterance_id="utt_%s" % turn.turn_id,
-                text=turn.assistant_text,
-                flush=False,
-            ),
+            TtsStreamEnd(),
         )
+
+    async def _run_turn(self, turn: _ActiveTurn) -> None:
+        try:
+            llm_start = self.clock.monotonic()
+            turn.assistant_text = await self.responder(turn.user_text)
+            turn.llm_ms = (self.clock.monotonic() - llm_start) * 1000
+            await self.transport.send(
+                Envelope(
+                    type="tts.speak",
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    seq=0,
+                    ts_ms=0,
+                ),
+                TtsSpeak(
+                    utterance_id="utt_%s" % turn.turn_id,
+                    text=turn.assistant_text,
+                    flush=False,
+                ),
+            )
+        finally:
+            await self._send_stream_end(turn)
         await turn.playback_finished.wait()
 
     async def _run_driver_turn(self, turn: _ActiveTurn) -> None:
         assert self.driver is not None
         turn.planner = TtsPlanner()
         first_tts = True
-        async for event in self.driver.run_turn(turn.user_text, list(self._history)):
-            if isinstance(event, TtsSpeak):
-                turn.planner.register(event.utterance_id, event.text)
-                if first_tts:
-                    self._set_state(TurnState.SPEAKING)  # THINKING -> SPEAKING
-                    first_tts = False
-                await self.transport.send(
-                    Envelope(
-                        type="tts.speak",
-                        session_id=self.session_id,
-                        turn_id=turn.turn_id,
-                        seq=0,
-                        ts_ms=0,
-                    ),
-                    event,
-                )
-            elif isinstance(event, TurnDriverReport):
-                turn.assistant_text = event.assistant_text
-                turn.llm_ms = event.llm_ms
-                turn.llm_cost = event.llm_cost
-                turn.mcp_tools_ms = event.mcp_tools_ms
+        try:
+            async for event in self.driver.run_turn(
+                turn.user_text, list(self._history)
+            ):
+                if isinstance(event, TtsSpeak):
+                    turn.planner.register(event.utterance_id, event.text)
+                    if first_tts:
+                        self._set_state(TurnState.SPEAKING)  # THINKING -> SPEAKING
+                        first_tts = False
+                    await self.transport.send(
+                        Envelope(
+                            type="tts.speak",
+                            session_id=self.session_id,
+                            turn_id=turn.turn_id,
+                            seq=0,
+                            ts_ms=0,
+                        ),
+                        event,
+                    )
+                elif isinstance(event, TurnDriverReport):
+                    turn.assistant_text = event.assistant_text
+                    turn.llm_ms = event.llm_ms
+                    turn.llm_cost = event.llm_cost
+                    turn.mcp_tools_ms = event.mcp_tools_ms
+        finally:
+            await self._send_stream_end(turn)
         await turn.playback_finished.wait()
 
     async def _interrupt(
@@ -246,6 +290,10 @@ class VoiceSession:
         if turn.speak_started_ms:
             turn.tts_ms = max(turn.tts_ms, ts_ms - turn.speak_started_ms)
         await self._cancel_task(turn)
+        # A task cancelled before its first run never executes its finally, so
+        # its stream-end barrier was never sent - send it here (exactly-once is
+        # guarded by turn.barrier_sent) or the gateway's drain would deadlock.
+        await self._send_stream_end(turn)
         self._complete(turn, tree, records)
         self._set_state(TurnState.IDLE)
 
