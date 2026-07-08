@@ -4,7 +4,7 @@
 **Epic:** Observability
 **Estimated effort:** ~5 h
 **Depends on:** 24
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -244,21 +244,21 @@ Test fixture:
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_devviewer.py -q` -> all pass
+- [x] `.venv/bin/python -m pytest tests/test_devviewer.py -q` -> all pass
       (>=12 tests), fixture-driven render covers waterfall, cost,
       transcript, and tools panels
-- [ ] `LUCY_TRACE_FILE=tests/fixtures/quickstart_trace.jsonl
+- [x] `LUCY_TRACE_FILE=tests/fixtures/quickstart_trace.jsonl
       .venv/bin/python -m lucy.serve.devviewer & sleep 2 && curl -s
       http://127.0.0.1:8642/ | grep -o 'id="waterfalls"\|id="costs"\|
       id="transcript"\|id="tool-calls"' | sort -u | wc -l; kill %1` ->
       prints `4` (all four panels served by the real CLI)
-- [ ] `grep -n "Scope cap (ADR 0010): no storage, no auth, no cross-run
+- [x] `grep -n "Scope cap (ADR 0010): no storage, no auth, no cross-run
       comparisons, no audio." src/lucy/serve/devviewer.py` -> exactly one
       match, inside the module docstring
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon is
       available)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
 
 ## Failure protocol
 
@@ -271,7 +271,12 @@ fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- Resolved the instrumentation gap needed for an honest quickstart fixture:
+  `VoiceAgent` now emits final caller/agent transcript events and a zero-cost
+  local cost event for simulator turns before the trace is flushed.
+- Playwright visual audit found cramped text inside zero-width waterfall
+  segments; the viewer now renders bars visually and shows segment values in a
+  stable row below them. No follow-up card needed.
 
 ## Pending human testing
 

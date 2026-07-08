@@ -13,13 +13,13 @@ Real provider plugins resolve through the same string seam in card 28.
 
 from __future__ import annotations
 
-import hashlib
 import asyncio
+import hashlib
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple, cast
 
-from lucy.metrics import LatencyWaterfall
+from lucy.metrics import CostBreakdown, LatencyWaterfall
 from lucy.observe import Tracer, configure
 from lucy.runtime import GraphContext, GraphExecutor, GraphNode
 from lucy.specs import LucySpec
@@ -40,6 +40,7 @@ KNOWN_PROVIDERS: Tuple[str, ...] = ("local",)
 RESPONSE_NODE = "llm"
 DEFAULT_STT_DEADLINE_MS = 500
 DEFAULT_TTS_DEADLINE_MS = 500
+LOCAL_SIMULATOR_BILLABLE_AUDIO_MINUTES = 1.0 / 60.0
 
 
 def _unknown_provider_message(kind: str, name: str) -> str:
@@ -222,6 +223,13 @@ class AgentSession:
 
         transcript = _last_transcript(events)
         if transcript is not None:
+            if self._tracer.enabled:
+                self._tracer.transcript(
+                    session_id=self.session_id,
+                    turn_id=turn.turn_id,
+                    role="caller",
+                    text=transcript,
+                )
             context = await self._agent.graph.run(
                 {"transcript": transcript, "session_id": self.session_id},
                 session_id=self.session_id,
@@ -270,6 +278,13 @@ class AgentSession:
                 )
             ]
         turn.tts_ms = (time.perf_counter() - started) * 1000
+        if self._tracer.enabled:
+            self._tracer.transcript(
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                role="agent",
+                text=text,
+            )
         self._emit_turn(turn)
         self._pending = None
         return events
@@ -305,5 +320,12 @@ class AgentSession:
                 ),
                 interrupted=False,
                 timeout_events=turn.timeout_events,
+            )
+            self._tracer.cost(
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                cost=CostBreakdown(
+                    billable_audio_minutes=LOCAL_SIMULATOR_BILLABLE_AUDIO_MINUTES
+                ),
             )
         self._turn_index += 1
