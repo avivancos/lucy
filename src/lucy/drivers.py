@@ -14,7 +14,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Dict, List, Optional, Protocol, Sequence, Union
+from typing import (
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Union,
+)
 
 from lucy.clock import Clock
 from lucy.llm import (
@@ -31,7 +40,7 @@ from lucy.llm import (
 from lucy.providers import ModelRegistry
 from lucy.settings import LatencyBudgets, LlmPricing
 from lucy.speech import MIN_FLUSH_CHARS, SentenceAssembler, TtsPlanner
-from lucy.tools import FillerPolicy, McpToolExecutor, ToolDef, ToolResult
+from lucy.tools import BargeInPolicy, FillerPolicy, McpToolExecutor, ToolDef, ToolResult
 from lucy.transport.schema import TtsSpeak
 
 
@@ -74,6 +83,7 @@ class CascadedTurnDriver:
         tools: Sequence[ToolDef] = (),
         filler_policy: Optional[FillerPolicy] = None,
         locale: str = "",
+        adopt_background_task: Optional[Callable[[asyncio.Task], None]] = None,
     ) -> None:
         # Validate the (provider, model) pair up front - fail fast if unregistered
         # (side effect only; we don't retain the ModelInfo).
@@ -89,6 +99,12 @@ class CascadedTurnDriver:
         self._tools_by_name: Dict[str, ToolDef] = {t.name: t for t in tools}
         self._filler_policy = filler_policy
         self._locale = locale
+        self._adopt_background_task = adopt_background_task
+
+    def set_background_task_adopter(
+        self, adopt_background_task: Optional[Callable[[asyncio.Task], None]]
+    ) -> None:
+        self._adopt_background_task = adopt_background_task
 
     async def run_turn(
         self, user_text: str, history: Sequence[LlmMessage]
@@ -162,11 +178,20 @@ class CascadedTurnDriver:
                 # Execute CONCURRENTLY with the filler: schedule the task, speak
                 # the filler while it runs, then await the result.
                 exec_task = asyncio.create_task(
-                    self._tool_executor.execute(tool, dict(tool_ready.arguments))
+                    self._tool_executor.execute(tool, dict(tool_ready.arguments)),
+                    name="tool:%s" % tool.key,
                 )
                 if filler_text is not None:
                     yield planner.plan(filler_text)
-                result = await exec_task
+                if tool.profile.on_barge_in == BargeInPolicy.RUN_TO_COMPLETION:
+                    try:
+                        result = await asyncio.shield(exec_task)
+                    except asyncio.CancelledError:
+                        if self._adopt_background_task is not None:
+                            self._adopt_background_task(exec_task)
+                        raise
+                else:
+                    result = await exec_task
                 mcp_tools_ms += result.elapsed_ms
 
             messages = [*messages, LlmMessage(**result.to_llm_message())]

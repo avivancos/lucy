@@ -13,12 +13,13 @@ from typing import Iterable, List, Optional, Tuple
 
 from lucy.clock import Clock, ManualClock
 from lucy.drivers import TurnDriver
-from lucy.evals import SyntheticCallScenario
+from lucy.evals import EvalEvidence, SyntheticCallScenario
 from lucy.metrics import LatencyWaterfall
 from lucy.session import Responder, TurnRecord, VoiceSession
 from lucy.settings import LatencyBudgets
 from lucy.tracing import Span
 from lucy.transport.dev_gateway import LocalGatewaySimulator
+from lucy.transport.schema import ControlEvent, TtsCancel, TtsSpeak
 
 
 @dataclass
@@ -27,6 +28,7 @@ class HarnessResult:
     turn_records: List[TurnRecord]
     spans: List[Span]
     waterfalls: List[LatencyWaterfall]
+    directives: List[ControlEvent]
 
 
 class ConversationHarness:
@@ -43,13 +45,17 @@ class ConversationHarness:
         tracer=None,
         budgets: Optional[LatencyBudgets] = None,
         barge_in_turns: Iterable[int] = (),
+        vad_interrupt_turns: Iterable[int] = (),
     ) -> HarnessResult:
         clock = clock or ManualClock()
+        if not tuple(barge_in_turns) and scenario.expected_outcome == "interruption":
+            barge_in_turns = (0,)
         gateway = LocalGatewaySimulator(
             scenario,
             clock,
             session_id=self.session_id,
             barge_in_turns=barge_in_turns,
+            vad_interrupt_turns=vad_interrupt_turns,
         )
         session = VoiceSession(
             self.session_id,
@@ -72,4 +78,40 @@ class ConversationHarness:
             turn_records=records,
             spans=session.spans,
             waterfalls=[record.waterfall for record in records],
+            directives=list(gateway.sent),
         )
+
+
+def evidence_from_result(
+    scenario: SyntheticCallScenario,
+    result: HarnessResult,
+) -> EvalEvidence:
+    interrupted = [record for record in result.turn_records if record.interrupted]
+    actual_outcome = "interruption" if interrupted else "completed"
+    has_cancel = any(
+        isinstance(event.payload, TtsCancel) for event in result.directives
+    )
+    handled = False
+    if interrupted and has_cancel:
+        record = interrupted[0]
+        planned = " ".join(
+            event.payload.text
+            for event in result.directives
+            if isinstance(event.payload, TtsSpeak)
+            and event.envelope.turn_id == record.turn_id
+        )
+        handled = (
+            bool(planned)
+            and planned.startswith(record.assistant_text)
+            and len(record.assistant_text) < len(planned)
+        )
+
+    return EvalEvidence(
+        actual_outcome=actual_outcome,
+        # M3 exercises interruption mechanics only; card 37 adds real evidence
+        # for outcome detection, RAG grounding, and policy adherence.
+        rag_grounded=True,
+        policy_adhered=True,
+        interruption_handled=handled,
+        escalated_to_human=False,
+    )

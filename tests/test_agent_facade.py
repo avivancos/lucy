@@ -41,7 +41,6 @@ CURATED_SURFACE = {
     "GraphNode",
     "GraphContext",
     # voice contracts + events
-    "RealtimeVoicePipeline",
     "AudioChunk",
     "TranscriptEvent",
     "TurnLatencyEvent",
@@ -115,8 +114,8 @@ def test_local_provider_strings_build_on_simulators():
     agent = VoiceAgent(_spec("local", "local"))
     from lucy.testing import LocalSttSimulator, LocalTtsSimulator
 
-    assert isinstance(agent.pipeline.stt_provider, LocalSttSimulator)
-    assert isinstance(agent.pipeline.tts_provider, LocalTtsSimulator)
+    assert isinstance(agent.stt_provider, LocalSttSimulator)
+    assert isinstance(agent.tts_provider, LocalTtsSimulator)
 
 
 def test_unknown_provider_string_raises_clear_error_naming_known_providers():
@@ -266,10 +265,10 @@ def test_tts_provider_timeout_is_aggregated_into_the_turn():
     tracer = _tracer(exporter)
     agent = VoiceAgent(_spec(), tracer=tracer)
     # force the TTS stage to blow its deadline
-    agent.pipeline.tts_deadline_ms = 1
+    agent.tts_deadline_ms = 1
     from lucy.testing import LocalTtsSimulator
 
-    agent.pipeline.tts_provider = LocalTtsSimulator(delay_ms=50)
+    agent.tts_provider = LocalTtsSimulator(delay_ms=50)
 
     async def run():
         session = agent.start_session("s1")

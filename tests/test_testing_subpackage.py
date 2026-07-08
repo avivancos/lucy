@@ -55,12 +55,3 @@ def test_unknown_attribute_still_raises_attribute_error(module_name):
     module = importlib.import_module(module_name)
     with pytest.raises(AttributeError):
         module.DefinitelyNotARealSymbol
-
-
-def test_pipeline_defaults_use_relocated_simulators():
-    from lucy.testing import LocalSttSimulator, LocalTtsSimulator
-    from lucy.voice import RealtimeVoicePipeline
-
-    pipeline = RealtimeVoicePipeline()
-    assert isinstance(pipeline.stt_provider, LocalSttSimulator)
-    assert isinstance(pipeline.tts_provider, LocalTtsSimulator)

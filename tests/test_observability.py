@@ -18,7 +18,6 @@ from lucy.observe import (
 from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
 from lucy.testing import InMemoryOtelSpanExporter, InMemoryTraceExporter
 from lucy.testing import LocalMcpCommandTransport
-from lucy.voice import AudioChunk, ProviderTimeoutEvent, RealtimeVoicePipeline
 
 
 def _counter():
@@ -450,17 +449,15 @@ def test_disabled_global_tracer_skips_exporter_discovery(monkeypatch):
     assert tracer._exporters == []
 
 
-def test_voice_pipeline_emits_turn_event_with_waterfall():
+def test_tracer_emits_turn_event_with_waterfall():
     exporter = InMemoryTraceExporter()
     tracer = _tracer(exporter)
-    pipeline = RealtimeVoicePipeline(tracer=tracer)
 
-    asyncio.run(
-        pipeline.handle_audio_turn(
-            [AudioChunk(session_id="s1", data=b"hello", sequence=0)],
-            turn_id="t1",
-            turn_index=0,
-        )
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(stt_ms=1.0),
     )
     tracer.flush()
 
@@ -472,20 +469,16 @@ def test_voice_pipeline_emits_turn_event_with_waterfall():
     assert turn.timeout_events == []
 
 
-def test_voice_pipeline_turn_carries_barge_in_flag():
+def test_turn_event_carries_barge_in_flag():
     exporter = InMemoryTraceExporter()
     tracer = _tracer(exporter)
-    pipeline = RealtimeVoicePipeline(tracer=tracer)
 
-    pipeline.start_tts_stream("s1", "a long spoken answer")
-    pipeline.handle_barge_in("s1")  # cancels the active TTS for this session
-
-    asyncio.run(
-        pipeline.handle_audio_turn(
-            [AudioChunk(session_id="s1", data=b"hi", sequence=0)],
-            turn_id="t2",
-            turn_index=1,
-        )
+    tracer.turn(
+        session_id="s1",
+        turn_id="t2",
+        turn_index=1,
+        latency_waterfall=LatencyWaterfall(stt_ms=1.0),
+        interrupted=True,
     )
     tracer.flush()
 
@@ -493,29 +486,19 @@ def test_voice_pipeline_turn_carries_barge_in_flag():
     assert turn.interrupted is True
 
 
-class _SlowStt:
-    async def transcribe(self, chunks):
-        await asyncio.sleep(0.05)
-        return []
-
-
-def test_voice_pipeline_turn_records_provider_timeout():
+def test_turn_event_records_provider_timeout():
     exporter = InMemoryTraceExporter()
     tracer = _tracer(exporter)
-    pipeline = RealtimeVoicePipeline(
-        stt_provider=_SlowStt(), stt_deadline_ms=1, tracer=tracer
-    )
 
-    returned = asyncio.run(
-        pipeline.handle_audio_turn(
-            [AudioChunk(session_id="s1", data=b"hi", sequence=0)],
-            turn_id="t1",
-            turn_index=0,
-        )
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+        timeout_events=["stt:transcribe"],
     )
     tracer.flush()
 
-    assert any(isinstance(event, ProviderTimeoutEvent) for event in returned)
     turn = next(event for event in exporter.events if event.type == "turn")
     assert turn.timeout_events == ["stt:transcribe"]
 
@@ -588,7 +571,7 @@ def test_emit_cost_produces_cost_event_for_turn():
     assert cost.cost.cost_per_minute == 0.25
 
 
-def test_pipeline_turn_produces_full_event_tree_with_correct_parents():
+def test_turn_produces_full_event_tree_with_correct_parents():
     exporter = InMemoryTraceExporter()
     tracer = _tracer(exporter)
     session_id, turn_id = "s1", "t1"
@@ -601,13 +584,11 @@ def test_pipeline_turn_produces_full_event_tree_with_correct_parents():
         transport="sim",
     )
 
-    pipeline = RealtimeVoicePipeline(tracer=tracer)
-    asyncio.run(
-        pipeline.handle_audio_turn(
-            [AudioChunk(session_id=session_id, data=b"hello", sequence=0)],
-            turn_id=turn_id,
-            turn_index=0,
-        )
+    tracer.turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(stt_ms=1.0),
     )
 
     async def llm(context):
@@ -657,13 +638,11 @@ def test_instrumentation_is_zero_overhead_when_tracing_disabled():
     tracer = _tracer(exporter, enabled=False)
     session_id, turn_id = "s1", "t1"
 
-    pipeline = RealtimeVoicePipeline(tracer=tracer)
-    asyncio.run(
-        pipeline.handle_audio_turn(
-            [AudioChunk(session_id=session_id, data=b"hi", sequence=0)],
-            turn_id=turn_id,
-            turn_index=0,
-        )
+    tracer.turn(
+        session_id=session_id,
+        turn_id=turn_id,
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(stt_ms=1.0),
     )
 
     async def llm(context):

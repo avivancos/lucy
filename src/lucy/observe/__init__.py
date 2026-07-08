@@ -507,7 +507,7 @@ def configure(
 
 # -- process-global tracer --------------------------------------------------
 #
-# Runtime components (GraphExecutor, RealtimeVoicePipeline, McpClient, the cost
+# Runtime components (GraphExecutor, VoiceSession, McpClient, the cost
 # helper) accept an explicit tracer but fall back to this shared instance when
 # none is injected, so a plain `pip install` quickstart emits telemetry with no
 # wiring. It is built lazily on first use to avoid import-time side effects

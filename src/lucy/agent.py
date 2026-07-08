@@ -14,9 +14,10 @@ Real provider plugins resolve through the same string seam in card 28.
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple, cast
 
 from lucy.metrics import LatencyWaterfall
 from lucy.observe import Tracer, configure
@@ -25,11 +26,9 @@ from lucy.specs import LucySpec
 from lucy.voice import (
     AudioChunk,
     ProviderTimeoutEvent,
-    RealtimeVoicePipeline,
     SttProvider,
     TranscriptEvent,
     TtsProvider,
-    TurnLatencyEvent,
     VoiceEvent,
 )
 
@@ -39,6 +38,8 @@ KNOWN_PROVIDERS: Tuple[str, ...] = ("local",)
 # Graph node whose result is the agent's spoken response, and whose latency is
 # the LLM slice of the waterfall.
 RESPONSE_NODE = "llm"
+DEFAULT_STT_DEADLINE_MS = 500
+DEFAULT_TTS_DEADLINE_MS = 500
 
 
 def _unknown_provider_message(kind: str, name: str) -> str:
@@ -88,26 +89,12 @@ class _PendingTurn:
     timeout_events: List[str] = field(default_factory=list)
 
 
-def _stt_ms(events: List[VoiceEvent]) -> float:
-    for event in events:
-        if isinstance(event, TurnLatencyEvent):
-            return event.stt_ms
-    return 0.0
-
-
-def _last_transcript(events: List[VoiceEvent]) -> Optional[str]:
+def _last_transcript(events: Sequence[VoiceEvent]) -> Optional[str]:
     text: Optional[str] = None
     for event in events:
         if isinstance(event, TranscriptEvent) and event.is_final:
             text = event.text
     return text
-
-
-def _timeout_stage(events: List[VoiceEvent], provider: str) -> Optional[str]:
-    for event in events:
-        if isinstance(event, ProviderTimeoutEvent) and event.provider == provider:
-            return "%s:%s" % (event.provider, event.stage)
-    return None
 
 
 def _graph_slices(context: GraphContext) -> Tuple[float, float, Optional[str]]:
@@ -145,11 +132,10 @@ class VoiceAgent:
             redact_pii=obs.redact_pii,
             record_audio=obs.record_audio,
         )
-        self.pipeline = RealtimeVoicePipeline(
-            stt_provider=_resolve_stt(spec.voice.stt_provider),
-            tts_provider=_resolve_tts(spec.voice.tts_provider),
-            tracer=self.tracer,
-        )
+        self.stt_provider = _resolve_stt(spec.voice.stt_provider)
+        self.tts_provider = _resolve_tts(spec.voice.tts_provider)
+        self.stt_deadline_ms = DEFAULT_STT_DEADLINE_MS
+        self.tts_deadline_ms = DEFAULT_TTS_DEADLINE_MS
         self.graph = graph if graph is not None else _default_graph(self.tracer)
         self._spec_hash = hashlib.sha256(
             spec.model_dump_json().encode("utf-8")
@@ -209,12 +195,30 @@ class AgentSession:
             self._emit_turn(self._pending)
             self._pending = None
 
-        events = list(await self._agent.pipeline.handle_audio_turn([chunk]))
         turn = _PendingTurn(turn_id=self._next_turn_id(), turn_index=self._turn_index)
-        turn.stt_ms = _stt_ms(events)
-        stt_timeout = _timeout_stage(events, "stt")
-        if stt_timeout:
-            turn.timeout_events.append(stt_timeout)
+        started = time.perf_counter()
+        try:
+            events = cast(
+                List[VoiceEvent],
+                list(
+                    await asyncio.wait_for(
+                        self._agent.stt_provider.transcribe([chunk]),
+                        timeout=self._agent.stt_deadline_ms / 1000,
+                    )
+                ),
+            )
+            turn.stt_ms = (time.perf_counter() - started) * 1000
+        except asyncio.TimeoutError:
+            turn.stt_ms = (time.perf_counter() - started) * 1000
+            turn.timeout_events.append("stt:transcribe")
+            events = [
+                ProviderTimeoutEvent(
+                    session_id=chunk.session_id,
+                    provider="stt",
+                    stage="transcribe",
+                    deadline_ms=self._agent.stt_deadline_ms,
+                )
+            ]
 
         transcript = _last_transcript(events)
         if transcript is not None:
@@ -228,10 +232,7 @@ class AgentSession:
             self.last_response = None
 
         self._pending = turn
-        # The TurnLatencyEvent is an internal pipeline artifact already folded
-        # into the turn event; keep the caller-facing stream to transcripts and
-        # provider-timeout signals.
-        return [event for event in events if not isinstance(event, TurnLatencyEvent)]
+        return events
 
     async def synthesize(self, text: str) -> List[VoiceEvent]:
         """Synthesize the agent's response and close the current turn, emitting
@@ -248,13 +249,27 @@ class AgentSession:
             )
         turn = self._pending
         started = time.perf_counter()
-        events = list(
-            await self._agent.pipeline.synthesize_response(self.session_id, text)
-        )
+        try:
+            events = cast(
+                List[VoiceEvent],
+                list(
+                    await asyncio.wait_for(
+                        self._agent.tts_provider.synthesize(self.session_id, text),
+                        timeout=self._agent.tts_deadline_ms / 1000,
+                    )
+                ),
+            )
+        except asyncio.TimeoutError:
+            turn.timeout_events.append("tts:synthesize")
+            events = [
+                ProviderTimeoutEvent(
+                    session_id=self.session_id,
+                    provider="tts",
+                    stage="synthesize",
+                    deadline_ms=self._agent.tts_deadline_ms,
+                )
+            ]
         turn.tts_ms = (time.perf_counter() - started) * 1000
-        tts_timeout = _timeout_stage(events, "tts")
-        if tts_timeout:
-            turn.timeout_events.append(tts_timeout)
         self._emit_turn(turn)
         self._pending = None
         return events

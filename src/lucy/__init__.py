@@ -29,7 +29,6 @@ from lucy.voice import (
     BargeInEvent,
     ProviderPayloadError,
     ProviderTimeoutEvent,
-    RealtimeVoicePipeline,
     SttProvider,
     TranscriptEvent,
     TtsProvider,
@@ -58,7 +57,6 @@ __all__ = [
     "GraphNode",
     "GraphContext",
     # voice contracts + events
-    "RealtimeVoicePipeline",
     "AudioChunk",
     "TranscriptEvent",
     "TurnLatencyEvent",

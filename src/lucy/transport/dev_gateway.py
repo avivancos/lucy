@@ -26,6 +26,7 @@ from lucy.transport.schema import (
     SttFinal,
     SttPartial,
     TtsSpeak,
+    TtsCancel,
     TtsPlayback,
     TtsStreamEnd,
     VadSpeechStart,
@@ -61,6 +62,7 @@ class LocalGatewaySimulator:
         self.barge_in_turns: FrozenSet[int] = frozenset(barge_in_turns)
         self.vad_interrupt_turns: FrozenSet[int] = frozenset(vad_interrupt_turns)
         self._inbound: "asyncio.Queue[Tuple[Envelope, object]]" = asyncio.Queue()
+        self.sent: list[ControlEvent] = []
         self._seq = 0
         # Virtual time seeded from the injected clock; it then advances by budget
         # increments per event (no wall-clock sleeping, so tests stay deterministic).
@@ -69,6 +71,7 @@ class LocalGatewaySimulator:
     # -- downstream (session -> gateway) ------------------------------------
 
     async def send(self, envelope: Envelope, payload: object) -> None:
+        self.sent.append(ControlEvent(envelope, payload))
         await self._inbound.put((envelope, payload))
 
     # -- upstream (gateway -> session) --------------------------------------
@@ -107,7 +110,7 @@ class LocalGatewaySimulator:
                 # Drain the cancelled turn's directives up to its stream-end
                 # barrier so nothing leaks into the next turn (card 64). The
                 # session guarantees the barrier even for a cancelled turn.
-                await self._collect_turn_directives()
+                await self._collect_turn_directives(turn_id)
                 continue
             async for event in self._agent_response(
                 turn_id, interrupt=index in self.barge_in_turns
@@ -141,14 +144,16 @@ class LocalGatewaySimulator:
             turn_id=turn_id,
         )
 
-    async def _collect_turn_directives(self) -> "list[TtsSpeak]":
+    async def _collect_turn_directives(self, turn_id: str) -> "list[TtsSpeak]":
         """Drain the turn's downstream directives up to the ``TtsStreamEnd``
         barrier the session sends exactly once per turn (card 64). Collecting
         the whole utterance set first is what lets a multi-clause turn play
         back deterministically and never leak clauses into the next turn."""
         utterances: "list[TtsSpeak]" = []
         while True:
-            _, directive = await self._inbound.get()
+            envelope, directive = await self._inbound.get()
+            if envelope.turn_id not in (None, turn_id):
+                continue
             if isinstance(directive, TtsSpeak):
                 utterances.append(directive)
             elif isinstance(directive, TtsStreamEnd):
@@ -170,7 +175,7 @@ class LocalGatewaySimulator:
     ) -> AsyncIterator[ControlEvent]:
         # Collect every clause of the turn (the session's stream-end barrier
         # bounds the wait, so this resolves without deadlock).
-        utterances = await self._collect_turn_directives()
+        utterances = await self._collect_turn_directives(turn_id)
         if not utterances:
             return
 
@@ -199,6 +204,8 @@ class LocalGatewaySimulator:
                 ),
                 turn_id=turn_id,
             )
+            async for event in self._flush_after_cancel(turn_id, last, heard):
+                yield event
             return
 
         # Clean playback: a mark per clause, one terminal finished after the
@@ -207,3 +214,19 @@ class LocalGatewaySimulator:
             yield self._playback(turn_id, utt.utterance_id, "mark", len(utt.text))
         last = utterances[-1]
         yield self._playback(turn_id, last.utterance_id, "finished", len(last.text))
+
+    async def _flush_after_cancel(
+        self, turn_id: str, utterance: TtsSpeak, heard: int
+    ) -> AsyncIterator[ControlEvent]:
+        while True:
+            try:
+                envelope, directive = self._inbound.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if envelope.turn_id not in (None, turn_id):
+                continue
+            if isinstance(directive, TtsCancel):
+                yield self._playback(turn_id, utterance.utterance_id, "flushed", heard)
+                return
+            elif isinstance(directive, TtsStreamEnd):
+                return

@@ -4,7 +4,7 @@
 **Epic:** Voice runtime
 **Estimated effort:** ~8 h
 **Depends on:** 34
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -233,7 +233,7 @@ def evidence_from_result(
 
 ## Chips
 
-- [ ] **C1 - SPEAKING barge-in cancels TTS and truncates by marks.** Test
+- [x] **C1 - SPEAKING barge-in cancels TTS and truncates by marks.** Test
   first in new `tests/test_interruption.py`:
   `test_barge_in_during_speaking_emits_tts_cancel_all_and_truncates_to_marks`
   - drive `VoiceSession` with `LocalGatewaySimulator` + `ManualClock` so the
@@ -248,7 +248,7 @@ def evidence_from_result(
   `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass
   (>=1 test). If card 32's first cut already passes parts, keep the test as
   regression and note it in "Improvements noted".
-- [ ] **C2 - Truncation edge cases.** Tests first:
+- [x] **C2 - Truncation edge cases.** Tests first:
   `test_barge_in_before_first_mark_records_empty_assistant_text`,
   `test_multi_utterance_turn_truncates_finished_plus_partial` (two
   sentence-flushed `TtsSpeak` utterances; first `finished`, second
@@ -258,7 +258,7 @@ def evidence_from_result(
   no `interrupted` flag). Files: `src/lucy/session.py`,
   `tests/test_interruption.py`. Verify:
   `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass.
-- [ ] **C3 - THINKING interruption discards unspoken output.** Tests first:
+- [x] **C3 - THINKING interruption discards unspoken output.** Tests first:
   `test_speech_during_thinking_cancels_run_and_discards_unspoken_output`
   (`VadSpeechStart` while the driver streams, before any `TtsSpeak`: no
   `TtsSpeak` directive is ever sent for that turn, `assistant_text == ""`,
@@ -267,7 +267,7 @@ def evidence_from_result(
   `SttFinal` text is the next `TurnRecord.user_text`). Implement the
   THINKING edge in `src/lucy/session.py`. Verify:
   `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass.
-- [ ] **C4 - Tool barge-in policies.** Tests first:
+- [x] **C4 - Tool barge-in policies.** Tests first:
   `test_barge_in_cancels_inflight_tool_with_cancel_policy` (transport
   blocked on a never-set `asyncio.Event`, same pattern as `SlowMcpTransport`
   in `tests/test_registry_mcp_metrics.py`; barge-in mid-execution; assert
@@ -281,14 +281,14 @@ def evidence_from_result(
   `src/lucy/session.py` (adopter + await-before-return), and the
   CancelledError pass-through in `src/lucy/tools.py`. Verify:
   `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass.
-- [ ] **C5 - Interruption storm leaves no orphans.** Test first:
+- [x] **C5 - Interruption storm leaves no orphans.** Test first:
   `test_repeated_barge_ins_leave_no_orphan_tasks` - a scenario with three
   consecutive interruptions; after `run()` returns, `asyncio.all_tasks()`
   matches the baseline and every interrupted record satisfies the
   proper-heard-prefix property. Fix any leak it finds in
   `src/lucy/session.py`. Verify:
   `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass.
-- [ ] **C6 - Retire the RealtimeVoicePipeline shim.** Run
+- [x] **C6 - Retire the RealtimeVoicePipeline shim.** Run
   `grep -rn "RealtimeVoicePipeline" src/ tests/ examples/` and record the
   hit list in "Improvements noted". Test first (red while the class exists):
   `test_realtime_voice_pipeline_is_retired` in
@@ -302,7 +302,7 @@ def evidence_from_result(
   `.venv/bin/python -m pytest tests/test_voice_pipeline.py -q` -> all pass,
   then `grep -rn "RealtimeVoicePipeline" src/ tests/ examples/` -> no
   matches.
-- [ ] **C7 - booking_interruption eval green via the harness.** Test first:
+- [x] **C7 - booking_interruption eval green via the harness.** Test first:
   `test_booking_interruption_eval_green_via_harness` - select the scenario
   by name from `default_sales_booking_scenarios()`, run
   `ConversationHarness.run`, build evidence with
@@ -313,7 +313,7 @@ def evidence_from_result(
   capture in `src/lucy/harness.py`. Verify:
   `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass
   (>=9 tests).
-- [ ] **C8 - Full suite + bookkeeping.** Run everything, confirm
+- [x] **C8 - Full suite + bookkeeping.** Run everything, confirm
   `src/lucy/mcp.py` and `src/lucy/evals.py` are untouched (`git diff --stat`
   shows no changes there), fill "Improvements noted", move this card to
   `done/`. Verify: `.venv/bin/python -m pytest -q` -> full suite green.
@@ -354,24 +354,24 @@ def evidence_from_result(
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass
+- [x] `.venv/bin/python -m pytest tests/test_interruption.py -q` -> all pass
       (>=9 tests): the truncated transcript matches exactly the heard prefix
       by marks; THINKING-phase speech discards unspoken output; both
       `on_barge_in` policies enforced; no orphan asyncio tasks after any
       interruption (asserted via `asyncio.all_tasks()`);
       `test_booking_interruption_eval_green_via_harness` passes with
       evidence computed from the run.
-- [ ] `.venv/bin/python -m pytest tests/test_voice_pipeline.py
+- [x] `.venv/bin/python -m pytest tests/test_voice_pipeline.py
       tests/test_voice_session.py tests/test_harness.py -q` -> all pass
       (shim retired without breaking the M0 suite).
-- [ ] `grep -rn "RealtimeVoicePipeline" src/ tests/ examples/` -> no matches.
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_interruption.py`
+- [x] `grep -rn "RealtimeVoicePipeline" src/ tests/ examples/` -> no matches.
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_interruption.py`
       -> no matches.
-- [ ] `git diff --stat src/lucy/mcp.py src/lucy/evals.py` -> no changes.
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker Compose
+- [x] `git diff --stat src/lucy/mcp.py src/lucy/evals.py` -> no changes.
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker Compose
       `docker compose run --rm lucy-api pytest` when the daemon is
       available).
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
       (at minimum: real `rag_grounded`/`policy_adhered` evidence signals if
       not already covered by card 37).
 
@@ -384,7 +384,32 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- Initial grep hits for `RealtimeVoicePipeline` before migration:
+  `src/lucy/voice.py`, `src/lucy/agent.py`, `src/lucy/__init__.py`,
+  `src/lucy/observe/__init__.py`, `tests/test_agent_facade.py`,
+  `tests/test_observability.py`, `tests/test_testing_subpackage.py`, and
+  `tests/test_voice_pipeline.py`. All were migrated; final grep over
+  `src/ tests/ examples/` returns no matches.
+- `LocalGatewaySimulator` already handled basic mark truncation, but it did not
+  emit/drain `flushed` after `TtsCancel` or safely skip stale cancel barriers.
+  This card added that behavior and kept the older gateway helper compatible
+  with directives that omit `turn_id`.
+- `RealtimeVoicePipeline` was still part of the curated facade and
+  observability tests. The facade now resolves local STT/TTS providers directly
+  and emits the unified turn telemetry without the shim.
+- M3 evidence still sets `rag_grounded=True` and `policy_adhered=True` because
+  interruption scenarios do not exercise those signals. Existing card 37 owns
+  broader golden-scenario outcome/evidence detection, so no new follow-up card
+  was needed.
+- Verification run with Docker Compose:
+  `docker compose run --rm lucy-api pytest tests/test_interruption.py -q` ->
+  `10 passed`;
+  `docker compose run --rm lucy-api pytest tests/test_voice_pipeline.py tests/test_voice_session.py tests/test_harness.py -q`
+  -> `11 passed`;
+  `docker compose run --rm lucy-api ruff check src tests` -> exit 0;
+  `docker compose run --rm lucy-api ruff format --check src tests` -> exit 0;
+  `docker compose run --rm lucy-api mypy src` -> exit 0;
+  `docker compose run --rm lucy-api pytest -q` -> `248 passed, 3 warnings`.
 
 ## Pending human testing
 
