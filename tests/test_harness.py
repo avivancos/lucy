@@ -13,7 +13,9 @@ async def test_harness_runs_a_scenario_end_to_end():
     assert isinstance(result, HarnessResult)
 
     caller_lines = [text for who, text in result.transcript if who == "caller"]
-    scenario_callers = [t.text for t in booking_happy_path().turns if t.speaker == "caller"]
+    scenario_callers = [
+        t.text for t in booking_happy_path().turns if t.speaker == "caller"
+    ]
     assert caller_lines == scenario_callers
 
     agent_lines = [text for who, text in result.transcript if who == "agent"]

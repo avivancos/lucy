@@ -41,7 +41,9 @@ class ToolProfile:
 
     expected_latency_ms: int
     deadline_ms: int
-    on_barge_in: BargeInPolicy = BargeInPolicy.CANCEL  # defined here, enforced in card 35
+    on_barge_in: BargeInPolicy = (
+        BargeInPolicy.CANCEL
+    )  # defined here, enforced in card 35
     speak_filler: bool = False
 
 

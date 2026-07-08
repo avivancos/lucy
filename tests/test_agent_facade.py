@@ -98,7 +98,9 @@ def test_dir_matches_curated_surface_exactly():
     # The module defines __dir__, so dir(lucy) is exactly the advertised surface
     # (no internal submodules leak into dir()/IDE autocomplete).
     assert dir(lucy) == sorted(CURATED_SURFACE)
-    assert not any(isinstance(getattr(lucy, name), types.ModuleType) for name in dir(lucy))
+    assert not any(
+        isinstance(getattr(lucy, name), types.ModuleType) for name in dir(lucy)
+    )
 
 
 def test_every_advertised_name_is_importable():

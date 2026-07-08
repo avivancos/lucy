@@ -34,8 +34,7 @@ class RagResult:
     @property
     def prompt_context(self) -> str:
         return "\n".join(
-            "[%s] %s" % (chunk.grounding_id, chunk.text)
-            for chunk in self.chunks
+            "[%s] %s" % (chunk.grounding_id, chunk.text) for chunk in self.chunks
         )
 
 
@@ -109,8 +108,7 @@ class HybridRagIndex:
                 self.embedding_backend.embed_chunk(chunk),
             )
             score = (
-                self.lexical_weight * lexical_score
-                + self.vector_weight * vector_score
+                self.lexical_weight * lexical_score + self.vector_weight * vector_score
             )
             if score > 0:
                 scored.append(

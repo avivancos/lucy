@@ -91,7 +91,11 @@ def test_voice_provider_simulators_reject_malformed_payloads():
     tts = LocalTtsSimulator()
 
     with pytest.raises(ProviderPayloadError):
-        asyncio.run(stt.transcribe([AudioChunk(session_id="sess_demo", data=b"\xff", sequence=1)]))
+        asyncio.run(
+            stt.transcribe(
+                [AudioChunk(session_id="sess_demo", data=b"\xff", sequence=1)]
+            )
+        )
 
     with pytest.raises(ProviderPayloadError):
         asyncio.run(tts.synthesize(session_id="sess_demo", text=""))

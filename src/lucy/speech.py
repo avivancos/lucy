@@ -50,7 +50,10 @@ class SentenceAssembler:
 
     def _first_flushable_boundary(self) -> int | None:
         for i, char in enumerate(self._buffer):
-            if char in CLAUSE_BOUNDARY_CHARS and len(self._buffer[: i + 1].strip()) >= self._min:
+            if (
+                char in CLAUSE_BOUNDARY_CHARS
+                and len(self._buffer[: i + 1].strip()) >= self._min
+            ):
                 return i
         return None
 

@@ -20,7 +20,11 @@ def test_lucy_api_model_forbids_unexpected_fields():
 
 def test_health_response_serializes_contract_payload():
     health = HealthResponse(service="lucy-api", status="ok", version="0.1.0")
-    assert health.model_dump() == {"service": "lucy-api", "status": "ok", "version": "0.1.0"}
+    assert health.model_dump() == {
+        "service": "lucy-api",
+        "status": "ok",
+        "version": "0.1.0",
+    }
 
 
 def test_api_openapi_uses_named_framework_schema_component():

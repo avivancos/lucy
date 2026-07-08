@@ -109,12 +109,16 @@ class LocalGatewaySimulator:
                 # session guarantees the barrier even for a cancelled turn.
                 await self._collect_turn_directives()
                 continue
-            async for event in self._agent_response(turn_id, interrupt=index in self.barge_in_turns):
+            async for event in self._agent_response(
+                turn_id, interrupt=index in self.barge_in_turns
+            ):
                 yield event
 
         yield self._emit("session.ended", SessionEnded(reason="scenario_complete"))
 
-    async def _caller_turn(self, turn_id: str, text: str) -> AsyncIterator[ControlEvent]:
+    async def _caller_turn(
+        self, turn_id: str, text: str
+    ) -> AsyncIterator[ControlEvent]:
         words = text.split()
         accumulated = ""
         for position, word in enumerate(words):
@@ -123,13 +127,17 @@ class LocalGatewaySimulator:
             stability = round((position + 1) / len(words), 6)
             yield self._emit(
                 "stt.partial",
-                SttPartial(text=accumulated, stability=stability, provider=self.provider),
+                SttPartial(
+                    text=accumulated, stability=stability, provider=self.provider
+                ),
                 turn_id=turn_id,
             )
         self._ts_ms += self.budgets.stt_final_ms
         yield self._emit(
             "stt.final",
-            SttFinal(text=text, provider=self.provider, stt_ms=self.budgets.stt_final_ms),
+            SttFinal(
+                text=text, provider=self.provider, stt_ms=self.budgets.stt_final_ms
+            ),
             turn_id=turn_id,
         )
 
@@ -147,7 +155,9 @@ class LocalGatewaySimulator:
                 return utterances
             # other directives (e.g. future tts.cancel) don't end collection
 
-    def _playback(self, turn_id: str, utterance_id: str, state: str, mark_chars: int) -> ControlEvent:
+    def _playback(
+        self, turn_id: str, utterance_id: str, state: str, mark_chars: int
+    ) -> ControlEvent:
         self._ts_ms += self.budgets.gateway_pacing_ms
         return self._emit(
             "tts.playback",

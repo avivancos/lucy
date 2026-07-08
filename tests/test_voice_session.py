@@ -66,7 +66,9 @@ async def test_barge_in_cancels_the_turn_truncates_and_leaves_no_orphans():
 async def test_thinking_phase_interruption_cancels_without_corrupting_waterfall():
     # Caller re-speaks (VadSpeechStart) while the agent is still THINKING, before
     # any TTS playback. The turn is cancelled and the waterfall stays sane.
-    gw = LocalGatewaySimulator(booking_happy_path(), ManualClock(), vad_interrupt_turns={0})
+    gw = LocalGatewaySimulator(
+        booking_happy_path(), ManualClock(), vad_interrupt_turns={0}
+    )
     session = VoiceSession("s1", gw, _canned, clock=ManualClock())
 
     records = await session.run()

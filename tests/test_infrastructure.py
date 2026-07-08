@@ -48,4 +48,3 @@ def test_rust_media_gateway_exposes_health_contract():
     assert "lucy-media-gateway" in source
     assert '"/health"' in source
     assert "8081" in source
-

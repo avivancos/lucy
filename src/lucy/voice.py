@@ -69,13 +69,11 @@ class ProviderPayloadError(ValueError):
 
 
 class SttProvider(Protocol):
-    async def transcribe(self, chunks: List[AudioChunk]) -> List[TranscriptEvent]:
-        ...
+    async def transcribe(self, chunks: List[AudioChunk]) -> List[TranscriptEvent]: ...
 
 
 class TtsProvider(Protocol):
-    async def synthesize(self, session_id: str, text: str) -> List[TtsStreamEvent]:
-        ...
+    async def synthesize(self, session_id: str, text: str) -> List[TtsStreamEvent]: ...
 
 
 class RealtimeVoicePipeline:

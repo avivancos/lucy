@@ -1,6 +1,12 @@
+import asyncio
 import json
 
+import pytest
+
+from lucy import observe as observe_module
+from lucy.mcp import McpClient, McpPermissionError
 from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.metrics import emit_cost
 from lucy.observe import (
     ConsoleExporter,
     OtelExporterBridge,
@@ -9,7 +15,10 @@ from lucy.observe import (
     Tracer,
     configure,
 )
+from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
 from lucy.testing import InMemoryOtelSpanExporter, InMemoryTraceExporter
+from lucy.testing import LocalMcpCommandTransport
+from lucy.voice import AudioChunk, ProviderTimeoutEvent, RealtimeVoicePipeline
 
 
 def _counter():
@@ -153,7 +162,9 @@ def test_jsonl_file_exporter_writes_wire_shaped_events(tmp_path, monkeypatch):
         session_id="s1",
         turn_id="t1",
         turn_index=0,
-        latency_waterfall=LatencyWaterfall(stt_ms=10, rag_ms=1, llm_ms=20, mcp_tools_ms=2, tts_ms=3, transport_ms=4),
+        latency_waterfall=LatencyWaterfall(
+            stt_ms=10, rag_ms=1, llm_ms=20, mcp_tools_ms=2, tts_ms=3, transport_ms=4
+        ),
     )
     tracer.cost(
         session_id="s1",
@@ -225,13 +236,23 @@ def test_audio_ref_dropped_when_record_audio_false():
 def test_session_sampling_is_deterministic_and_drops_unsampled():
     dropped = InMemoryTraceExporter()
     off = _tracer(dropped, sample_rate=0.0)
-    off.turn(session_id="s1", turn_id="t1", turn_index=0, latency_waterfall=LatencyWaterfall())
+    off.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+    )
     off.flush()
     assert dropped.events == []
 
     kept = InMemoryTraceExporter()
     on = _tracer(kept, sample_rate=1.0)
-    on.turn(session_id="s1", turn_id="t1", turn_index=0, latency_waterfall=LatencyWaterfall())
+    on.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+    )
     on.flush()
     assert len(kept.events) == 1
 
@@ -242,7 +263,12 @@ def test_exporter_failure_is_fail_open_and_counts_drops():
             raise RuntimeError("ingest down")
 
     tracer = _tracer(Boom())
-    tracer.turn(session_id="s1", turn_id="t1", turn_index=0, latency_waterfall=LatencyWaterfall())
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+    )
     tracer.flush()  # must not raise
     assert tracer.dropped_events == 1
 
@@ -266,7 +292,12 @@ def test_tracing_disabled_yields_noop_tracer(monkeypatch):
     monkeypatch.setenv("LUCY_TRACING", "0")
     exporter = InMemoryTraceExporter()
     tracer = configure(exporters=[exporter])
-    tracer.turn(session_id="s1", turn_id="t1", turn_index=0, latency_waterfall=LatencyWaterfall())
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+    )
     tracer.flush()
     assert exporter.events == []
 
@@ -274,7 +305,12 @@ def test_tracing_disabled_yields_noop_tracer(monkeypatch):
 def test_otlp_bridge_exporter_emits_one_span_per_event():
     spans = InMemoryOtelSpanExporter()
     tracer = _tracer(OtlpBridgeExporter(spans, service_name="lucy-api"))
-    tracer.turn(session_id="s1", turn_id="t1", turn_index=0, latency_waterfall=LatencyWaterfall(stt_ms=9))
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(stt_ms=9),
+    )
     tracer.flush()
     assert len(spans.spans) == 1
     assert spans.spans[0]["name"] == "lucy.turn"
@@ -304,17 +340,6 @@ def test_entry_point_discovery_attaches_factory_results(monkeypatch):
 
 
 # -- card 25: runtime instrumentation wired into the tracer ------------------
-
-import asyncio
-
-import pytest
-
-from lucy import observe as observe_module
-from lucy.mcp import McpClient, McpPermissionError
-from lucy.metrics import emit_cost
-from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
-from lucy.testing import LocalMcpCommandTransport
-from lucy.voice import AudioChunk, ProviderTimeoutEvent, RealtimeVoicePipeline
 
 
 @pytest.fixture(autouse=True)
@@ -413,9 +438,7 @@ def test_disabled_global_tracer_skips_exporter_discovery(monkeypatch):
 
     monkeypatch.setattr("importlib.metadata.entry_points", _forbidden)
 
-    client = McpClient(
-        LocalMcpCommandTransport(), allowed_tools=["crm.upsert_lead"]
-    )
+    client = McpClient(LocalMcpCommandTransport(), allowed_tools=["crm.upsert_lead"])
     asyncio.run(
         client.call_tool(
             "crm", "upsert_lead", {"lead_id": "x"}, session_id="s1", turn_id="t1"
@@ -512,9 +535,7 @@ def test_mcp_client_emits_tool_call_for_allowed_and_denied():
         )
     )
     with pytest.raises(McpPermissionError):
-        asyncio.run(
-            client.call_tool("crm", "nope", {}, session_id="s1", turn_id="t1")
-        )
+        asyncio.run(client.call_tool("crm", "nope", {}, session_id="s1", turn_id="t1"))
     tracer.flush()
 
     calls = [event for event in exporter.events if event.type == "tool_call"]
@@ -602,8 +623,11 @@ def test_pipeline_turn_produces_full_event_tree_with_correct_parents():
     )
     asyncio.run(
         client.call_tool(
-            "crm", "upsert_lead", {"lead_id": "x"},
-            session_id=session_id, turn_id=turn_id,
+            "crm",
+            "upsert_lead",
+            {"lead_id": "x"},
+            session_id=session_id,
+            turn_id=turn_id,
         )
     )
 
@@ -655,8 +679,11 @@ def test_instrumentation_is_zero_overhead_when_tracing_disabled():
     )
     asyncio.run(
         client.call_tool(
-            "crm", "upsert_lead", {"lead_id": "x"},
-            session_id=session_id, turn_id=turn_id,
+            "crm",
+            "upsert_lead",
+            {"lead_id": "x"},
+            session_id=session_id,
+            turn_id=turn_id,
         )
     )
 
@@ -683,8 +710,11 @@ def test_components_use_global_tracer_when_none_injected():
         )
         asyncio.run(
             client.call_tool(
-                "crm", "upsert_lead", {"lead_id": "x"},
-                session_id="s1", turn_id="t1",
+                "crm",
+                "upsert_lead",
+                {"lead_id": "x"},
+                session_id="s1",
+                turn_id="t1",
             )
         )
         custom.flush()

@@ -72,7 +72,9 @@ def test_graph_executor_retries_before_success():
             raise ValueError("transient provider failure")
         return "ok"
 
-    executor = GraphExecutor(nodes=[GraphNode(name="llm", handler=flaky_node, retries=1)])
+    executor = GraphExecutor(
+        nodes=[GraphNode(name="llm", handler=flaky_node, retries=1)]
+    )
 
     context = asyncio.run(executor.run({}))
 

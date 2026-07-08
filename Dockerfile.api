@@ -6,9 +6,9 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY tests ./tests
 
+# Dev extras are the sanctioned Docker path for tests, lint, and type checks.
 RUN pip install --no-cache-dir -e ".[dev]"
 
 EXPOSE 8000
 
 CMD ["uvicorn", "lucy.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
-

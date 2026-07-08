@@ -13,8 +13,9 @@ from lucy.observe import Tracer, get_tracer
 
 
 class McpTransport(Protocol):
-    async def call_tool(self, server: str, tool: str, arguments: Dict[str, Any]) -> Any:
-        ...
+    async def call_tool(
+        self, server: str, tool: str, arguments: Dict[str, Any]
+    ) -> Any: ...
 
 
 @dataclass

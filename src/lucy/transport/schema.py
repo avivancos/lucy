@@ -171,9 +171,7 @@ def parse_event(raw: Dict[str, object]) -> ControlEvent:
     envelope = Envelope(**{k: v for k, v in raw.items() if k in ENVELOPE_FIELDS})
     model = MESSAGE_TYPES.get(envelope.type)
     if model is None:
-        raise UnknownControlMessage(
-            "unknown control message type: %r" % envelope.type
-        )
+        raise UnknownControlMessage("unknown control message type: %r" % envelope.type)
     payload = model(**{k: v for k, v in raw.items() if k not in ENVELOPE_FIELDS})
     return ControlEvent(envelope, payload)
 

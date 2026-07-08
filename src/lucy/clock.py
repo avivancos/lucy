@@ -15,8 +15,7 @@ class Clock(Protocol):
         """Seconds since an arbitrary epoch; only differences are meaningful."""
         ...
 
-    async def sleep(self, seconds: float) -> None:
-        ...
+    async def sleep(self, seconds: float) -> None: ...
 
 
 class MonotonicClock:

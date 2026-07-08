@@ -99,4 +99,3 @@ class LucySpec(BaseModel):
     crm: Optional[CrmSpec] = None
     observability: ObservabilitySpec = Field(default_factory=ObservabilitySpec)
     evals: EvalSpec = Field(default_factory=EvalSpec)
-

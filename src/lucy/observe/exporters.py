@@ -17,8 +17,7 @@ from lucy.observe.otel import OtelExporterBridge, OtelSpan, OtelSpanExporter
 
 @runtime_checkable
 class TraceExporter(Protocol):
-    def export_batch(self, events: List[TelemetryEvent]) -> None:
-        ...
+    def export_batch(self, events: List[TelemetryEvent]) -> None: ...
 
 
 class ConsoleExporter:
@@ -80,7 +79,9 @@ class OtlpBridgeExporter:
         span_exporter: OtelSpanExporter,
         service_name: str = "lucy-api",
     ) -> None:
-        self._bridge = OtelExporterBridge(exporter=span_exporter, service_name=service_name)
+        self._bridge = OtelExporterBridge(
+            exporter=span_exporter, service_name=service_name
+        )
 
     def export_batch(self, events: List[TelemetryEvent]) -> None:
         for event in events:

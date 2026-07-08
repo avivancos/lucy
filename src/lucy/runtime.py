@@ -106,7 +106,9 @@ class GraphExecutor:
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            for task in sorted(done, key=lambda item: self._node_order(active[item].name)):
+            for task in sorted(
+                done, key=lambda item: self._node_order(active[item].name)
+            ):
                 node = active.pop(task)
                 try:
                     await task

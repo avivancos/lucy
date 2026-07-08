@@ -57,7 +57,9 @@ def card_id(path: Path) -> int:
 
 
 def upgraded_cards() -> list[Path]:
-    return [p for p in pending_cards() if "**Sprint:**" in p.read_text(encoding="utf-8")]
+    return [
+        p for p in pending_cards() if "**Sprint:**" in p.read_text(encoding="utf-8")
+    ]
 
 
 def section(text: str, heading: str) -> str:
@@ -109,7 +111,9 @@ def test_upgraded_pending_cards_follow_the_junior_standard():
                 problems.append(f"{path.name}: missing header field {field}")
         sprint_match = re.search(r"\*\*Sprint:\*\* (S\d+)", text)
         if sprint_match and sprint_match.group(1) not in valid_sprints:
-            problems.append(f"{path.name}: sprint {sprint_match.group(1)} not in sprints.md")
+            problems.append(
+                f"{path.name}: sprint {sprint_match.group(1)} not in sprints.md"
+            )
         for heading in REQUIRED_SECTIONS:
             if heading not in text:
                 problems.append(f"{path.name}: missing section {heading}")
@@ -229,6 +233,5 @@ def test_reviewed_states_require_substantive_review_evidence():
             if not _is_substantive(body):
                 missing.append(f"{state}/{path.name}")
     assert not missing, (
-        "cards past the review gate lack substantive '## Review evidence': "
-        f"{missing}"
+        f"cards past the review gate lack substantive '## Review evidence': {missing}"
     )

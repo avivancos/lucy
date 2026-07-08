@@ -36,7 +36,11 @@ async def _drive(gw, response="Happy to help"):
 
 
 def _by_turn(events, turn_id, kind):
-    return [e.payload for e in events if e.envelope.turn_id == turn_id and isinstance(e.payload, kind)]
+    return [
+        e.payload
+        for e in events
+        if e.envelope.turn_id == turn_id and isinstance(e.payload, kind)
+    ]
 
 
 async def test_caller_turn_yields_word_accumulating_partials_then_final():
@@ -67,7 +71,11 @@ async def test_tts_speak_produces_started_mark_finished_playback():
     assert states.count("mark") >= 2
     assert states.count("finished") == 2
     # a finished mark reports the full utterance length
-    finished = [p for p in (e.payload for e in events) if isinstance(p, TtsPlayback) and p.state == "finished"]
+    finished = [
+        p
+        for p in (e.payload for e in events)
+        if isinstance(p, TtsPlayback) and p.state == "finished"
+    ]
     assert finished[0].mark_chars == len("Happy to help")
 
 
@@ -93,9 +101,7 @@ async def test_empty_caller_utterance_yields_a_final_with_no_partials():
 
 
 async def test_barge_in_turn_emits_barge_in_and_no_finished():
-    gw = LocalGatewaySimulator(
-        booking_happy_path(), ManualClock(), barge_in_turns={0}
-    )
+    gw = LocalGatewaySimulator(booking_happy_path(), ManualClock(), barge_in_turns={0})
     events = await _drive(gw)
     t0 = [e.payload for e in events if e.envelope.turn_id == "turn_0"]
     assert any(getattr(p, "during", None) == "speaking" for p in t0)  # a BargeIn fired
@@ -133,7 +139,13 @@ async def test_multi_clause_turn_plays_every_clause_with_one_terminal_finished()
             )
 
     playback = [e.payload for e in events if isinstance(e.payload, TtsPlayback)]
-    assert [p.state for p in playback] == ["started", "mark", "mark", "mark", "finished"]
+    assert [p.state for p in playback] == [
+        "started",
+        "mark",
+        "mark",
+        "mark",
+        "finished",
+    ]
     assert playback[0].utterance_id == "u0"
     marks = [p for p in playback if p.state == "mark"]
     assert [(m.utterance_id, m.mark_chars) for m in marks] == [

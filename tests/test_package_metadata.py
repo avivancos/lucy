@@ -31,7 +31,8 @@ def test_python_package_metadata_and_dependencies():
 
     dev_dependencies = "\n".join(project["optional-dependencies"]["dev"])
     assert "pytest" in dev_dependencies
+    assert "headroom-ai[all]" not in dependencies
+    assert "headroom-ai[all]" in "\n".join(project["optional-dependencies"]["headroom"])
 
     assert pyproject["tool"]["setuptools"]["packages"]["find"]["where"] == ["src"]
     assert pyproject["tool"]["pytest"]["ini_options"]["testpaths"] == ["tests"]
-

@@ -54,7 +54,12 @@ async def test_first_tts_speak_before_stream_end_within_budget():
     interval_ms = budgets.llm_first_clause_ms / 10  # derived, never a literal
     clock = ManualClock()
     sim = LocalLlmSimulator(
-        [ScriptedLlmTurn(tokens=["Sure, ", "I can ", "help. ", "Anything else?"], usage=UsageReport(3, 5))],
+        [
+            ScriptedLlmTurn(
+                tokens=["Sure, ", "I can ", "help. ", "Anything else?"],
+                usage=UsageReport(3, 5),
+            )
+        ],
         clock,
         token_interval_ms=interval_ms,
     )
@@ -74,7 +79,9 @@ async def test_first_tts_speak_before_stream_end_within_budget():
     await _drain(clock, task, interval_ms)
 
     first_tts_time = next(t for t, e in zip(stamps, events) if isinstance(e, TtsSpeak))
-    report_time = next(t for t, e in zip(stamps, events) if isinstance(e, TurnDriverReport))
+    report_time = next(
+        t for t, e in zip(stamps, events) if isinstance(e, TurnDriverReport)
+    )
     assert first_tts_time < report_time  # first clause spoke before the stream ended
     assert (first_tts_time - start["t"]) <= budgets.llm_first_clause_ms / 1000.0 + 1e-9
 
@@ -133,10 +140,12 @@ async def test_driver_flushes_multiple_clauses_in_order():
     # (the mid-stream flush, not a single coalesced utterance).
     clock = ManualClock()
     sim = LocalLlmSimulator(
-        [ScriptedLlmTurn(
-            tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
-            usage=UsageReport(3, 5),
-        )],
+        [
+            ScriptedLlmTurn(
+                tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
+                usage=UsageReport(3, 5),
+            )
+        ],
         clock,
         token_interval_ms=1,
     )
@@ -161,10 +170,12 @@ async def test_harness_multi_clause_turn_completes_without_deadlock():
     budgets = LatencyBudgets()
     clock = ManualClock()
     sim = LocalLlmSimulator(
-        [ScriptedLlmTurn(
-            tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
-            usage=UsageReport(10, 4),
-        )],
+        [
+            ScriptedLlmTurn(
+                tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
+                usage=UsageReport(10, 4),
+            )
+        ],
         clock,
         token_interval_ms=budgets.llm_first_clause_ms / 10,
     )
@@ -206,7 +217,9 @@ async def test_voice_session_rejects_responder_and_driver_together():
         return "x"
 
     clock = ManualClock()
-    sim = LocalLlmSimulator([ScriptedLlmTurn(tokens=["Hi."], usage=UsageReport(1, 1))], clock, 1)
+    sim = LocalLlmSimulator(
+        [ScriptedLlmTurn(tokens=["Hi."], usage=UsageReport(1, 1))], clock, 1
+    )
     driver = _driver(clock, sim, LatencyBudgets(), min_flush_chars=1)
     gw = LocalGatewaySimulator(booking_happy_path(), ManualClock())
 
@@ -222,28 +235,45 @@ async def test_harness_booking_happy_path_with_llm_simulator():
     # one scripted LLM turn per caller turn; tokens spell the agent reply
     sim = LocalLlmSimulator(
         [
-            ScriptedLlmTurn(tokens=["Happy ", "to ", "help ", "you."], usage=UsageReport(10, 4)),
-            ScriptedLlmTurn(tokens=["Booked ", "for ", "Tuesday."], usage=UsageReport(12, 3)),
+            ScriptedLlmTurn(
+                tokens=["Happy ", "to ", "help ", "you."], usage=UsageReport(10, 4)
+            ),
+            ScriptedLlmTurn(
+                tokens=["Booked ", "for ", "Tuesday."], usage=UsageReport(12, 3)
+            ),
         ],
         clock,
         token_interval_ms=budgets.llm_first_clause_ms / 10,
     )
-    driver = _driver(clock, sim, budgets, pricing=LlmPricing(completion_per_1k=0.02), min_flush_chars=8)
+    driver = _driver(
+        clock,
+        sim,
+        budgets,
+        pricing=LlmPricing(completion_per_1k=0.02),
+        min_flush_chars=8,
+    )
 
     # the driver's simulator paces tokens on the shared ManualClock, so advance
     # virtual time while the harness runs (no wall time consumed)
     task = asyncio.create_task(
-        ConversationHarness().run(booking_happy_path(), None, clock=clock, driver=driver)
+        ConversationHarness().run(
+            booking_happy_path(), None, clock=clock, driver=driver
+        )
     )
     await _drain(clock, task, budgets.llm_first_clause_ms / 10)
     result = task.result()
 
     caller_lines = [text for who, text in result.transcript if who == "caller"]
-    assert caller_lines == [t.text for t in booking_happy_path().turns if t.speaker == "caller"]
+    assert caller_lines == [
+        t.text for t in booking_happy_path().turns if t.speaker == "caller"
+    ]
     assert result.transcript[1] == ("agent", "Happy to help you.")
     # driver-filled telemetry
     assert all(r.waterfall.llm_ms > 0 for r in result.turn_records)
-    assert all(r.cost is not None and r.cost.billable_audio_minutes > 0 for r in result.turn_records)
+    assert all(
+        r.cost is not None and r.cost.billable_audio_minutes > 0
+        for r in result.turn_records
+    )
     assert result.turn_records[0].cost.llm_cost == pytest.approx(4 / 1000 * 0.02)
 
 
@@ -253,7 +283,9 @@ async def test_harness_booking_happy_path_with_llm_simulator():
 async def test_empty_stream_yields_no_tts_speak_and_empty_report():
     clock = ManualClock()
     sim = LocalLlmSimulator(
-        [ScriptedLlmTurn(tokens=[], usage=UsageReport(1, 0))], clock, token_interval_ms=0
+        [ScriptedLlmTurn(tokens=[], usage=UsageReport(1, 0))],
+        clock,
+        token_interval_ms=0,
     )
     driver = _driver(clock, sim, LatencyBudgets(), min_flush_chars=1)
 
@@ -281,10 +313,12 @@ async def test_driver_turn_barge_in_truncates_multi_clause_via_planner():
     budgets = LatencyBudgets()
     clock = ManualClock()
     sim = LocalLlmSimulator(
-        [ScriptedLlmTurn(
-            tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
-            usage=UsageReport(10, 4),
-        )],
+        [
+            ScriptedLlmTurn(
+                tokens=["Happy ", "to ", "help. ", "Anything ", "else?"],
+                usage=UsageReport(10, 4),
+            )
+        ],
         clock,
         token_interval_ms=budgets.llm_first_clause_ms / 10,
     )

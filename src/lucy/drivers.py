@@ -50,8 +50,7 @@ DriverEvent = Union[TtsSpeak, TurnDriverReport]
 class TurnDriver(Protocol):
     def run_turn(
         self, user_text: str, history: Sequence[LlmMessage]
-    ) -> AsyncIterator[DriverEvent]:
-        ...
+    ) -> AsyncIterator[DriverEvent]: ...
 
 
 class ToolCallsNotSupported(RuntimeError):
@@ -183,7 +182,6 @@ class CascadedTurnDriver:
     def _cost(self, usage: Optional[UsageReport]) -> float:
         if usage is None or self._pricing is None:
             return 0.0
-        return (
-            (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k
-            + (usage.completion_tokens / 1000.0) * self._pricing.completion_per_1k
-        )
+        return (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k + (
+            usage.completion_tokens / 1000.0
+        ) * self._pricing.completion_per_1k

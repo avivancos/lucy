@@ -66,7 +66,9 @@ A global hard gate that complements the per-card Definition of Done in
 
 - Spec -> red test -> green code -> refactor complete; the suite is green via
   `docker compose run --rm lucy-api pytest`.
-- `ruff check`, `ruff format --check`, and `mypy` are clean.
+- `docker compose run --rm lucy-api ruff check src tests`,
+  `docker compose run --rm lucy-api ruff format --check src tests`, and
+  `docker compose run --rm lucy-api mypy src` are clean.
 - The app boots from a clean state: `docker compose up --build` from an empty database,
   never relying on committed state.
 - Audit done: UI work has had a visual audit; API or runtime work has been smoke-tested

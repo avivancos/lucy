@@ -55,5 +55,7 @@ def redact_event(
     if isinstance(event, TranscriptEvent):
         return event.model_copy(update={"text": redact_text(event.text)})
     if isinstance(event, ToolCallEvent):
-        return event.model_copy(update={"arguments": _redact_arguments(event.arguments)})
+        return event.model_copy(
+            update={"arguments": _redact_arguments(event.arguments)}
+        )
     return event

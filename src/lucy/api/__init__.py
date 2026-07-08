@@ -1,2 +1,1 @@
 """Lucy FastAPI application package."""
-

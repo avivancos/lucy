@@ -13,8 +13,7 @@ class LocalMcpCommandTransport:
 
     async def call_tool(self, server: str, tool: str, arguments: Dict[str, Any]) -> Any:
         command = {
-            "command_id": "mcp_%s_%s_%s"
-            % (server, tool, len(self.commands) + 1),
+            "command_id": "mcp_%s_%s_%s" % (server, tool, len(self.commands) + 1),
             "server": server,
             "tool": tool,
             "status": "queued",

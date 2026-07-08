@@ -53,8 +53,7 @@ def score_synthetic_call(
         gates["interruption_handling"] = evidence.interruption_handled
     if scenario.expected_outcome == "failed_booking":
         gates["failed_booking_behavior"] = (
-            evidence.actual_outcome == "failed_booking"
-            and evidence.policy_adhered
+            evidence.actual_outcome == "failed_booking" and evidence.policy_adhered
         )
 
     reason_labels = {
@@ -65,11 +64,7 @@ def score_synthetic_call(
         "interruption_handling": "interruption handling failed",
         "failed_booking_behavior": "failed booking behavior failed",
     }
-    reasons = [
-        reason_labels[name]
-        for name, passed in gates.items()
-        if not passed
-    ]
+    reasons = [reason_labels[name] for name, passed in gates.items() if not passed]
     passed_gate_count = sum(1 for passed in gates.values() if passed)
 
     return EvalRubricResult(

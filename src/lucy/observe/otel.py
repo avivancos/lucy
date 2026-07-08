@@ -40,8 +40,7 @@ class ObservabilityEvent:
 
 
 class OtelSpanExporter(Protocol):
-    def export(self, span: OtelSpan) -> None:
-        ...
+    def export(self, span: OtelSpan) -> None: ...
 
 
 @dataclass

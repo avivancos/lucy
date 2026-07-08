@@ -27,7 +27,9 @@ class Span:
 class TurnSpanTree:
     """Builds and emits the span hierarchy for a single call."""
 
-    def __init__(self, session_id: str, *, id_factory: Optional[Callable[[], str]] = None) -> None:
+    def __init__(
+        self, session_id: str, *, id_factory: Optional[Callable[[], str]] = None
+    ) -> None:
         self.session_id = session_id
         self._id = id_factory or (lambda: uuid.uuid4().hex)
         self.spans: List[Span] = []

@@ -68,7 +68,7 @@ class CostEvent(TelemetryEventBase):
 
     def to_wire(self) -> Dict[str, object]:
         data = super().to_wire()
-        cost = dict(data["cost"])  # type: ignore[arg-type]
+        cost = self.cost.model_dump(mode="json")
         cost["total_cost"] = self.cost.total_cost
         cost["cost_per_minute"] = self.cost.cost_per_minute
         data["cost"] = cost

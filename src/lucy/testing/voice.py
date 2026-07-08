@@ -64,10 +64,14 @@ class LocalTtsSimulator:
         if not text.strip():
             raise ProviderPayloadError("tts text cannot be blank")
 
-        events = [TtsStreamEvent(session_id=session_id, status="started", chunk_text="")]
+        events = [
+            TtsStreamEvent(session_id=session_id, status="started", chunk_text="")
+        ]
         for word in text.split():
             events.append(
                 TtsStreamEvent(session_id=session_id, status="chunk", chunk_text=word)
             )
-        events.append(TtsStreamEvent(session_id=session_id, status="finished", chunk_text=""))
+        events.append(
+            TtsStreamEvent(session_id=session_id, status="finished", chunk_text="")
+        )
         return events

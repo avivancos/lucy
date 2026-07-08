@@ -26,7 +26,6 @@ from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
     BargeIn,
-    ControlEvent,
     Envelope,
     SessionEnded,
     SttFinal,
@@ -171,9 +170,7 @@ class VoiceSession:
                         payload.utterance_id
                     ):
                         active.ended_ms = event.envelope.ts_ms
-                        active.tts_ms = (
-                            event.envelope.ts_ms - active.speak_started_ms
-                        )
+                        active.tts_ms = event.envelope.ts_ms - active.speak_started_ms
                         active.playback_finished.set()
                         await self._await_task(active)
                         self._complete(active, tree, records)
@@ -221,6 +218,7 @@ class VoiceSession:
         )
 
     async def _run_turn(self, turn: _ActiveTurn) -> None:
+        assert self.responder is not None
         try:
             llm_start = self.clock.monotonic()
             turn.assistant_text = await self.responder(turn.user_text)
@@ -303,7 +301,9 @@ class VoiceSession:
         record = self._finalize(turn, tree)
         records.append(record)
         self._history.append(LlmMessage(role="user", content=record.user_text))
-        self._history.append(LlmMessage(role="assistant", content=record.assistant_text))
+        self._history.append(
+            LlmMessage(role="assistant", content=record.assistant_text)
+        )
 
     async def _await_task(self, turn: _ActiveTurn) -> None:
         if turn.task is not None:
@@ -369,6 +369,4 @@ class VoiceSession:
             attributes={"llm_ms": "%.3f" % turn.llm_ms},
         )
         if turn.speak_started_ms:
-            tree.node_span(
-                turn_span, "tts", turn.speak_started_ms, end, status=status
-            )
+            tree.node_span(turn_span, "tts", turn.speak_started_ms, end, status=status)

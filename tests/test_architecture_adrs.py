@@ -103,7 +103,8 @@ def test_open_core_adr_defines_boundary_license_and_telemetry_seam():
     assert "## Status\n\nAccepted" in adr
     assert (
         "anything that runs inside the\nuser's process is open" in adr
-        or "anything that runs inside the user's process is open" in adr.replace("\n", " ")
+        or "anything that runs inside the user's process is open"
+        in adr.replace("\n", " ")
     )
     assert "stores, aggregates, or compares" in adr.replace("\n", " ")
     assert "apache-2.0" in adr_lower
@@ -189,9 +190,7 @@ def test_nextjs_dashboard_adr_is_decision_complete():
     assert "UI implementation must be visually audited before task closure" in adr
 
 
-TELEPHONY_MEDIA_PLANE_ADR = (
-    "docs/adr/0004-ultra-low-latency-telephony-media-plane.md"
-)
+TELEPHONY_MEDIA_PLANE_ADR = "docs/adr/0004-ultra-low-latency-telephony-media-plane.md"
 
 
 def test_telephony_media_plane_adr_is_accepted_and_decision_complete():

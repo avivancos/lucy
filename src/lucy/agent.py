@@ -72,7 +72,9 @@ def _default_graph(tracer: Tracer) -> GraphExecutor:
             return "You said: %s" % transcript
         return "Hello, how can I help?"
 
-    return GraphExecutor([GraphNode(name=RESPONSE_NODE, handler=respond)], tracer=tracer)
+    return GraphExecutor(
+        [GraphNode(name=RESPONSE_NODE, handler=respond)], tracer=tracer
+    )
 
 
 @dataclass
@@ -246,7 +248,9 @@ class AgentSession:
             )
         turn = self._pending
         started = time.perf_counter()
-        events = list(await self._agent.pipeline.synthesize_response(self.session_id, text))
+        events = list(
+            await self._agent.pipeline.synthesize_response(self.session_id, text)
+        )
         turn.tts_ms = (time.perf_counter() - started) * 1000
         tts_timeout = _timeout_stage(events, "tts")
         if tts_timeout:

@@ -239,9 +239,49 @@ async def test_adapter_assembles_tool_call_deltas_into_ready():
     events = await _collect(
         _sse_app(
             [
-                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "book_meeting", "arguments": ""}}]}, "finish_reason": None}]},
-                {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"day\":"}}]}, "finish_reason": None}]},
-                {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "\"Tue\"}"}}]}, "finish_reason": None}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "function": {
+                                            "name": "book_meeting",
+                                            "arguments": "",
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {"index": 0, "function": {"arguments": '{"day":'}}
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {"index": 0, "function": {"arguments": '"Tue"}'}}
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
                 {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
             ]
         )
@@ -276,9 +316,17 @@ async def test_adapter_emits_error_finish_on_malformed_sse_line():
     events = await _collect(
         _raw_sse_app(
             [
-                json.dumps({"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]}),
+                json.dumps(
+                    {"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]}
+                ),
                 "{not valid json",  # hostile/buggy upstream frame
-                json.dumps({"choices": [{"delta": {"content": "lost"}, "finish_reason": "stop"}]}),
+                json.dumps(
+                    {
+                        "choices": [
+                            {"delta": {"content": "lost"}, "finish_reason": "stop"}
+                        ]
+                    }
+                ),
                 "[DONE]",
             ]
         )
@@ -292,7 +340,25 @@ async def test_adapter_emits_error_finish_on_malformed_tool_arguments():
     events = await _collect(
         _sse_app(
             [
-                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "book", "arguments": "{broken"}}]}, "finish_reason": None}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "c1",
+                                        "function": {
+                                            "name": "book",
+                                            "arguments": "{broken",
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
                 {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
             ]
         )
@@ -313,7 +379,10 @@ async def test_adapter_emits_error_finish_on_malformed_usage_fields():
         _sse_app(
             [
                 {"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]},
-                {"choices": [], "usage": {"prompt_tokens": "NaN", "completion_tokens": 2}},
+                {
+                    "choices": [],
+                    "usage": {"prompt_tokens": "NaN", "completion_tokens": 2},
+                },
             ]
         )
     )
@@ -326,7 +395,22 @@ async def test_adapter_emits_error_finish_on_malformed_tool_index():
     events = await _collect(
         _sse_app(
             [
-                {"choices": [{"delta": {"tool_calls": [{"index": "oops", "id": "c1", "function": {"name": "book", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": "oops",
+                                        "id": "c1",
+                                        "function": {"name": "book", "arguments": "{}"},
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
             ]
         )
     )
@@ -344,7 +428,25 @@ async def test_adapter_emits_error_finish_on_non_object_tool_arguments():
     events = await _collect(
         _sse_app(
             [
-                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "book", "arguments": "[1, 2]"}}]}, "finish_reason": None}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "c1",
+                                        "function": {
+                                            "name": "book",
+                                            "arguments": "[1, 2]",
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
                 {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
             ]
         )

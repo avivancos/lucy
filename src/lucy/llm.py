@@ -80,8 +80,7 @@ LlmStreamEvent = Union[TokenDelta, ToolCallDelta, ToolCallReady, UsageReport, St
 
 
 class LlmProvider(Protocol):
-    def stream_chat(self, request: LlmRequest) -> AsyncIterator[LlmStreamEvent]:
-        ...
+    def stream_chat(self, request: LlmRequest) -> AsyncIterator[LlmStreamEvent]: ...
 
 
 # -- model resolution --------------------------------------------------------
@@ -230,9 +229,7 @@ class OpenAiCompatibleAdapter:
                                     raise ValueError("non-string content delta")
                                 yield TokenDelta(text=content)
                             for call in delta.get("tool_calls") or []:
-                                async for event in self._tool_delta(
-                                    call, tool_args
-                                ):
+                                async for event in self._tool_delta(call, tool_args):
                                     yield event
                             if choice.get("finish_reason"):
                                 finish_reason = choice["finish_reason"]
@@ -276,27 +273,44 @@ class OpenAiCompatibleAdapter:
     async def _tool_delta(
         self, call: Dict[str, object], tool_args: Dict[int, Dict[str, str]]
     ) -> AsyncIterator[LlmStreamEvent]:
-        index = int(call.get("index", 0))
+        raw_index = call.get("index", 0)
+        if not isinstance(raw_index, int):
+            raise ValueError("non-integer tool_call index")
+        index = raw_index
         state = tool_args.setdefault(index, {"call_id": "", "name": "", "args": ""})
         if call.get("id"):
             state["call_id"] = str(call["id"])
         function = call.get("function") or {}
-        if function.get("name"):
-            state["name"] = str(function["name"])
+        if not isinstance(function, dict):
+            raise ValueError("tool_call function must be an object")
+        raw_name = function.get("name")
+        if raw_name:
+            state["name"] = str(raw_name)
         arguments_delta = function.get("arguments", "")
+        if not isinstance(arguments_delta, str):
+            raise ValueError("tool_call arguments delta must be a string")
         if arguments_delta:
             state["args"] += arguments_delta
             yield ToolCallDelta(
                 call_id=state["call_id"],
-                name=function.get("name"),
+                name=str(raw_name) if raw_name else None,
                 arguments_delta=arguments_delta,
             )
 
 
 def _usage_from(raw: Dict[str, object]) -> UsageReport:
     details = raw.get("prompt_tokens_details") or {}
+    if not isinstance(details, dict):
+        raise ValueError("prompt_tokens_details must be an object")
     return UsageReport(
-        prompt_tokens=int(raw.get("prompt_tokens", 0)),
-        completion_tokens=int(raw.get("completion_tokens", 0)),
-        cached_prompt_tokens=int(details.get("cached_tokens", 0)),
+        prompt_tokens=_int_field(raw, "prompt_tokens"),
+        completion_tokens=_int_field(raw, "completion_tokens"),
+        cached_prompt_tokens=_int_field(details, "cached_tokens"),
     )
+
+
+def _int_field(raw: Dict[str, object], name: str) -> int:
+    value = raw.get(name, 0)
+    if not isinstance(value, (int, str)):
+        raise ValueError("%s must be an integer" % name)
+    return int(value)

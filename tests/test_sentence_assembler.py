@@ -7,7 +7,9 @@ from lucy.transport.schema import TtsCancel, TtsPlayback, TtsSpeak
 
 def test_feed_flushes_clause_at_boundary_past_min_length():
     assembler = SentenceAssembler(min_flush_chars=10)
-    assert assembler.feed("Hello there,") == ["Hello there,"]  # 12 chars, comma boundary
+    assert assembler.feed("Hello there,") == [
+        "Hello there,"
+    ]  # 12 chars, comma boundary
 
 
 def test_short_clause_stays_buffered_until_next_boundary():
@@ -50,12 +52,22 @@ def test_spoken_text_truncates_to_last_mark_chars_on_barge_in():
     first = planner.plan("Hello there.")
     second = planner.plan("How can I help you today?")
 
-    planner.record_playback(TtsPlayback(utterance_id=first.utterance_id, state="started", mark_chars=0))
     planner.record_playback(
-        TtsPlayback(utterance_id=first.utterance_id, state="finished", mark_chars=len("Hello there."))
+        TtsPlayback(utterance_id=first.utterance_id, state="started", mark_chars=0)
     )
-    planner.record_playback(TtsPlayback(utterance_id=second.utterance_id, state="started", mark_chars=0))
-    planner.record_playback(TtsPlayback(utterance_id=second.utterance_id, state="mark", mark_chars=7))
+    planner.record_playback(
+        TtsPlayback(
+            utterance_id=first.utterance_id,
+            state="finished",
+            mark_chars=len("Hello there."),
+        )
+    )
+    planner.record_playback(
+        TtsPlayback(utterance_id=second.utterance_id, state="started", mark_chars=0)
+    )
+    planner.record_playback(
+        TtsPlayback(utterance_id=second.utterance_id, state="mark", mark_chars=7)
+    )
 
     assert planner.spoken_text() == "Hello there. How can"
 
@@ -66,7 +78,11 @@ def test_spoken_text_is_all_finished_utterances_when_uninterrupted():
     b = planner.plan("Tuesday works.")
     for utt in (a, b):
         planner.record_playback(
-            TtsPlayback(utterance_id=utt.utterance_id, state="finished", mark_chars=len(utt.text))
+            TtsPlayback(
+                utterance_id=utt.utterance_id,
+                state="finished",
+                mark_chars=len(utt.text),
+            )
         )
     assert planner.spoken_text() == "Sure. Tuesday works."
 

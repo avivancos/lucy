@@ -146,8 +146,10 @@ async def test_simulator_streams_tool_call_then_scripted_followup():
     sim = LocalLlmSimulator(
         [
             ScriptedLlmTurn(
-                tokens=[], usage=UsageReport(5, 0),
-                finish_reason="tool_calls", tool_calls=[ready],
+                tokens=[],
+                usage=UsageReport(5, 0),
+                finish_reason="tool_calls",
+                tool_calls=[ready],
             ),
             ScriptedLlmTurn(tokens=["Booked."], usage=UsageReport(6, 2)),
         ],
@@ -158,13 +160,19 @@ async def test_simulator_streams_tool_call_then_scripted_followup():
     events1 = [e async for e in sim.stream_chat(_req())]
     assert any(isinstance(e, ToolCallDelta) for e in events1)
     ready_event = next(e for e in events1 if isinstance(e, ToolCallReady))
-    assert ready_event.name == "book_meeting" and ready_event.arguments == {"day": "tue"}
-    assert isinstance(events1[-1], StreamEnd) and events1[-1].finish_reason == "tool_calls"
+    assert ready_event.name == "book_meeting" and ready_event.arguments == {
+        "day": "tue"
+    }
+    assert (
+        isinstance(events1[-1], StreamEnd) and events1[-1].finish_reason == "tool_calls"
+    )
 
     # the next stream_chat (messages now carry the tool result) streams the answer
     followup = _req(
         LlmMessage(role="user", content="book tue"),
-        LlmMessage(role="tool", content='{"ok": true}', tool_call_id="crm.book_meeting"),
+        LlmMessage(
+            role="tool", content='{"ok": true}', tool_call_id="crm.book_meeting"
+        ),
     )
     events2 = [e async for e in sim.stream_chat(followup)]
     assert [e.text for e in events2 if isinstance(e, TokenDelta)] == ["Booked."]
@@ -177,7 +185,9 @@ async def test_deadline_yields_timeout_result():
             await asyncio.Event().wait()
 
     client = McpClient(BlockingTransport(), allowed_tools=["crm.slow"])
-    executor = McpToolExecutor(client, MonotonicClock())  # real clock: deadline is wall time
+    executor = McpToolExecutor(
+        client, MonotonicClock()
+    )  # real clock: deadline is wall time
     tool = _tool(server="crm", name="slow", deadline_ms=1)
 
     result = await executor.execute(tool, {})
@@ -236,8 +246,17 @@ class ClockAdvancingTransport:
         return command
 
 
-def _mk_driver(clock, llm, *, tools=(), executor=None, filler_policy=None,
-               locale="", budgets=None, min_flush=1):
+def _mk_driver(
+    clock,
+    llm,
+    *,
+    tools=(),
+    executor=None,
+    filler_policy=None,
+    locale="",
+    budgets=None,
+    min_flush=1,
+):
     return CascadedTurnDriver(
         llm,
         default_model_registry(),
@@ -255,7 +274,10 @@ def _mk_driver(clock, llm, *, tools=(), executor=None, filler_policy=None,
 
 def _tool_turn(call):
     return ScriptedLlmTurn(
-        tokens=[], usage=UsageReport(1, 0), finish_reason="tool_calls", tool_calls=[call]
+        tokens=[],
+        usage=UsageReport(1, 0),
+        finish_reason="tool_calls",
+        tool_calls=[call],
     )
 
 
@@ -263,7 +285,10 @@ async def test_tool_call_mid_stream_speaks_one_filler_and_completes_round():
     clock = ManualClock()
     call = ToolCallReady(call_id="c1", name="book_meeting", arguments={"day": "tue"})
     sim = LocalLlmSimulator(
-        [_tool_turn(call), ScriptedLlmTurn(tokens=["Booked."], usage=UsageReport(2, 1))],
+        [
+            _tool_turn(call),
+            ScriptedLlmTurn(tokens=["Booked."], usage=UsageReport(2, 1)),
+        ],
         clock,
         token_interval_ms=0,
     )
@@ -271,8 +296,12 @@ async def test_tool_call_mid_stream_speaks_one_filler_and_completes_round():
     client = McpClient(transport, allowed_tools=["crm.book_meeting"])
     executor = McpToolExecutor(client, clock)
     driver = _mk_driver(
-        clock, sim, tools=[_tool(speak_filler=True)], executor=executor,
-        filler_policy=FillerPolicy(DEFAULT_FILLERS), locale="en-US",
+        clock,
+        sim,
+        tools=[_tool(speak_filler=True)],
+        executor=executor,
+        filler_policy=FillerPolicy(DEFAULT_FILLERS),
+        locale="en-US",
     )
 
     events = [e async for e in driver.run_turn("book tue", [])]
@@ -291,8 +320,10 @@ async def test_no_filler_when_a_sentence_is_already_buffered():
     call = ToolCallReady(call_id="c1", name="book_meeting", arguments={})
     # "Let me " has no boundary -> still buffered when the tool call arrives
     tool_turn = ScriptedLlmTurn(
-        tokens=["Let me "], usage=UsageReport(1, 0),
-        finish_reason="tool_calls", tool_calls=[call],
+        tokens=["Let me "],
+        usage=UsageReport(1, 0),
+        finish_reason="tool_calls",
+        tool_calls=[call],
     )
     sim = LocalLlmSimulator(
         [tool_turn, ScriptedLlmTurn(tokens=["Booked."], usage=UsageReport(2, 1))],
@@ -302,8 +333,13 @@ async def test_no_filler_when_a_sentence_is_already_buffered():
     client = McpClient(LocalMcpCommandTransport(), allowed_tools=["crm.book_meeting"])
     executor = McpToolExecutor(client, clock)
     driver = _mk_driver(
-        clock, sim, tools=[_tool(speak_filler=True)], executor=executor,
-        filler_policy=FillerPolicy(DEFAULT_FILLERS), locale="en-US", min_flush=8,
+        clock,
+        sim,
+        tools=[_tool(speak_filler=True)],
+        executor=executor,
+        filler_policy=FillerPolicy(DEFAULT_FILLERS),
+        locale="en-US",
+        min_flush=8,
     )
 
     events = [e async for e in driver.run_turn("x", [])]
@@ -332,7 +368,10 @@ async def test_tool_rounds_capped_by_typed_budget():
     client = McpClient(transport, allowed_tools=["crm.book_meeting"])
     executor = McpToolExecutor(client, clock)
     driver = _mk_driver(
-        clock, recorder, tools=[_tool()], executor=executor,
+        clock,
+        recorder,
+        tools=[_tool()],
+        executor=executor,
         budgets=LatencyBudgets(max_tool_rounds_per_turn=2),
     )
 
@@ -353,7 +392,9 @@ async def test_unknown_tool_name_yields_unknown_tool_result_no_execution():
     sim = LocalLlmSimulator(
         [
             _tool_turn(call),
-            ScriptedLlmTurn(tokens=["Sorry, ", "unavailable."], usage=UsageReport(1, 2)),
+            ScriptedLlmTurn(
+                tokens=["Sorry, ", "unavailable."], usage=UsageReport(1, 2)
+            ),
         ],
         clock,
         token_interval_ms=0,
@@ -362,7 +403,9 @@ async def test_unknown_tool_name_yields_unknown_tool_result_no_execution():
     transport = LocalMcpCommandTransport()
     client = McpClient(transport, allowed_tools=["crm.book_meeting"])
     executor = McpToolExecutor(client, clock)
-    driver = _mk_driver(clock, recorder, tools=[_tool()], executor=executor)  # only book_meeting
+    driver = _mk_driver(
+        clock, recorder, tools=[_tool()], executor=executor
+    )  # only book_meeting
 
     events = [e async for e in driver.run_turn("use the ghost tool", [])]
     report = next(e for e in events if isinstance(e, TurnDriverReport))
@@ -388,7 +431,8 @@ async def test_mcp_tools_ms_accrues_into_turn_waterfall():
     executor = McpToolExecutor(client, clock)
     driver = _mk_driver(clock, sim, tools=[_tool()], executor=executor)
     scenario = SyntheticCallScenario(
-        name="one_turn", objective="x",
+        name="one_turn",
+        objective="x",
         turns=[SyntheticTurn(speaker="caller", text="hello")],
         expected_outcome="booked",
     )
@@ -408,7 +452,9 @@ async def test_denied_tool_recovers_verbally_audited_no_crash():
     sim = LocalLlmSimulator(
         [
             _tool_turn(call),
-            ScriptedLlmTurn(tokens=["Sorry, ", "I can't ", "do that."], usage=UsageReport(2, 3)),
+            ScriptedLlmTurn(
+                tokens=["Sorry, ", "I can't ", "do that."], usage=UsageReport(2, 3)
+            ),
         ],
         clock,
         token_interval_ms=0,
@@ -430,7 +476,9 @@ async def test_timeout_recovers_verbally():
     sim = LocalLlmSimulator(
         [
             _tool_turn(call),
-            ScriptedLlmTurn(tokens=["That ", "took ", "too long."], usage=UsageReport(2, 3)),
+            ScriptedLlmTurn(
+                tokens=["That ", "took ", "too long."], usage=UsageReport(2, 3)
+            ),
         ],
         clock,
         token_interval_ms=0,
@@ -441,7 +489,9 @@ async def test_timeout_recovers_verbally():
             await asyncio.Event().wait()
 
     client = McpClient(BlockingTransport(), allowed_tools=["crm.slow"])
-    executor = McpToolExecutor(client, MonotonicClock())  # real clock: wall-time deadline
+    executor = McpToolExecutor(
+        client, MonotonicClock()
+    )  # real clock: wall-time deadline
     tool = _tool(server="crm", name="slow", deadline_ms=1)
     driver = _mk_driver(clock, sim, tools=[tool], executor=executor)
 

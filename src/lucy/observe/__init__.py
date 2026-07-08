@@ -60,6 +60,7 @@ __all__ = [
     "JsonlFileExporter",
     "OtlpBridgeExporter",
     "TelemetryEvent",
+    "TelemetryEventBase",
     "SessionStartedEvent",
     "SessionEndedEvent",
     "TurnEvent",
@@ -491,7 +492,9 @@ def configure(
         # entry-point discovery entirely: building the global tracer with
         # LUCY_TRACING=0 stays cheap (zero-overhead-when-off, card 25 review).
         chosen = []
-    rate = sample_rate if sample_rate is not None else _env_float("LUCY_TRACE_SAMPLE", 1.0)
+    rate = (
+        sample_rate if sample_rate is not None else _env_float("LUCY_TRACE_SAMPLE", 1.0)
+    )
     redaction = True if redact_pii is None else redact_pii
     return Tracer(
         exporters=chosen,

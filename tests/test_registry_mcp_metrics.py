@@ -10,7 +10,13 @@ from lucy.mcp import (
     McpTimeoutError,
     McpToolSchema,
 )
-from lucy.metrics import CostBreakdown, CrmMetricEvent, FunnelEvent, LatencyWaterfall, SentimentScore
+from lucy.metrics import (
+    CostBreakdown,
+    CrmMetricEvent,
+    FunnelEvent,
+    LatencyWaterfall,
+    SentimentScore,
+)
 from lucy.providers import (
     Capability,
     ModelInfo,
@@ -57,9 +63,7 @@ def test_model_registry_marks_low_latency_voice_stack():
     registry = default_model_registry()
 
     low_latency_models = {
-        (model.provider, model.model)
-        for model in registry.models
-        if model.low_latency
+        (model.provider, model.model) for model in registry.models if model.low_latency
     }
 
     assert ("deepgram", "flux") in low_latency_models
@@ -133,9 +137,7 @@ def test_model_registry_revalidation_reports_catalog_changes_without_mutation():
     assert report.added == ["voiceco/new-tts"]
     assert report.removed == []
     assert report.renamed == ["voiceco/old-stt -> voiceco/renamed-stt"]
-    assert report.capability_changed == [
-        "voiceco/talker: tts -> realtime,tts"
-    ]
+    assert report.capability_changed == ["voiceco/talker: tts -> realtime,tts"]
     assert checked_in.get("voiceco", "old-stt") is not None
     assert checked_in.get("voiceco", "new-tts") is None
 
@@ -143,16 +145,22 @@ def test_model_registry_revalidation_reports_catalog_changes_without_mutation():
 def test_model_registry_revalidation_due_uses_registry_version_date():
     registry = ModelRegistry(version="2026-06-01", models=[])
 
-    assert registry_revalidation_due(
-        registry,
-        as_of="2026-07-10",
-        max_age_days=30,
-    ) is True
-    assert registry_revalidation_due(
-        registry,
-        as_of="2026-06-15",
-        max_age_days=30,
-    ) is False
+    assert (
+        registry_revalidation_due(
+            registry,
+            as_of="2026-07-10",
+            max_age_days=30,
+        )
+        is True
+    )
+    assert (
+        registry_revalidation_due(
+            registry,
+            as_of="2026-06-15",
+            max_age_days=30,
+        )
+        is False
+    )
 
 
 def test_cost_per_minute_uses_all_components():
