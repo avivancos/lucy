@@ -10,6 +10,7 @@ engines; a deterministic in-process simulator is the no-mocks test double.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Dict, List, Literal, Optional, Protocol, Union
@@ -19,6 +20,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lucy.clock import Clock
 from lucy.providers import Capability, ModelInfo, ModelRegistry
+
+PROMPT_CACHE_FIELD = "prompt_cache_key"
+
+
+def compute_cache_key(session_id: str, system_prompt: str) -> str:
+    seed = (session_id + "\x00" + system_prompt).encode("utf-8")
+    return hashlib.sha256(seed).hexdigest()[:16]
 
 
 # -- request models ----------------------------------------------------------
@@ -130,8 +138,10 @@ class LocalLlmSimulator:
         self._interval_s = token_interval_ms / 1000.0
         self._index = 0
         self.cancelled = False
+        self.seen_cache_keys: List[Optional[str]] = []
 
     async def stream_chat(self, request: LlmRequest) -> AsyncIterator[LlmStreamEvent]:
+        self.seen_cache_keys.append(request.cache_key)
         turn = self._turns[self._index]
         self._index += 1
         try:
@@ -172,12 +182,14 @@ class OpenAiCompatibleAdapter:
         self._api_key = api_key
         self._client = http_client
 
-    def _payload(self, request: LlmRequest) -> Dict[str, object]:
+    def build_payload(self, request: LlmRequest) -> Dict[str, object]:
         payload: Dict[str, object] = {
             "model": request.model,
             "messages": [m.model_dump(exclude_none=True) for m in request.messages],
             "stream": True,
         }
+        if request.cache_key is not None:
+            payload[PROMPT_CACHE_FIELD] = request.cache_key
         if request.tools is not None:
             payload["tools"] = request.tools
         if request.temperature is not None:
@@ -201,7 +213,7 @@ class OpenAiCompatibleAdapter:
             async with client.stream(
                 "POST",
                 self._base_url + "/chat/completions",
-                json=self._payload(request),
+                json=self.build_payload(request),
                 headers=headers,
             ) as response:
                 async for raw in response.aiter_lines():

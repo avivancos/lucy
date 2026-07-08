@@ -58,7 +58,11 @@ DriverEvent = Union[TtsSpeak, TurnDriverReport]
 
 class TurnDriver(Protocol):
     def run_turn(
-        self, user_text: str, history: Sequence[LlmMessage]
+        self,
+        user_text: str,
+        history: Sequence[LlmMessage],
+        *,
+        turn_context: object | None = None,
     ) -> AsyncIterator[DriverEvent]: ...
 
 
@@ -100,14 +104,22 @@ class CascadedTurnDriver:
         self._filler_policy = filler_policy
         self._locale = locale
         self._adopt_background_task = adopt_background_task
+        self._cache_key: Optional[str] = None
 
     def set_background_task_adopter(
         self, adopt_background_task: Optional[Callable[[asyncio.Task], None]]
     ) -> None:
         self._adopt_background_task = adopt_background_task
 
+    def set_cache_key(self, cache_key: Optional[str]) -> None:
+        self._cache_key = cache_key
+
     async def run_turn(
-        self, user_text: str, history: Sequence[LlmMessage]
+        self,
+        user_text: str,
+        history: Sequence[LlmMessage],
+        *,
+        turn_context: object | None = None,
     ) -> AsyncIterator[DriverEvent]:
         assembler = SentenceAssembler(self._min_flush)
         planner = TtsPlanner()
@@ -124,7 +136,10 @@ class CascadedTurnDriver:
 
         while True:
             request = LlmRequest(
-                provider=self._provider, model=self._model, messages=messages
+                provider=self._provider,
+                model=self._model,
+                messages=messages,
+                cache_key=self._cache_key,
             )
             tool_ready: Optional[ToolCallReady] = None
             buffered_at_call = False
@@ -170,6 +185,9 @@ class CascadedTurnDriver:
                     tool_key=tool_ready.name, ok=False, error_kind="unknown_tool"
                 )
             else:
+                if getattr(turn_context, "speculative", False):
+                    promoted = getattr(turn_context, "promoted")
+                    await promoted.wait()
                 assert self._tool_executor is not None  # guaranteed above
                 tool = self._tools_by_name[tool_ready.name]
                 filler_text = None

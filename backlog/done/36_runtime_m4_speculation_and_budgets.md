@@ -4,7 +4,7 @@
 **Epic:** Voice runtime
 **Estimated effort:** ~8 h
 **Depends on:** 35
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -232,7 +232,7 @@ under 1 s of wall time.
 
 ## Chips
 
-- [ ] **C1 - Speculation settings, gated off by default.** Record
+- [x] **C1 - Speculation settings, gated off by default.** Record
   `shasum src/lucy/rag.py` in "Improvements noted" before coding. Tests
   first in new `tests/test_speculation.py`:
   `test_speculative_llm_is_off_by_default` (fresh `SpeculationSettings()`
@@ -245,7 +245,7 @@ under 1 s of wall time.
   `src/lucy/settings.py`. Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass
   (>=3 tests).
-- [ ] **C2 - Decision logic.** Tests first:
+- [x] **C2 - Decision logic.** Tests first:
   `test_on_partial_below_thresholds_returns_none`,
   `test_on_partial_at_rag_threshold_prefetches_once_per_text` (same
   normalized text twice -> `PREFETCH_RAG` then `NONE`),
@@ -256,7 +256,7 @@ under 1 s of wall time.
   `speculating` in `src/lucy/session.py` (pure decision state; no tasks
   yet). Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass.
-- [ ] **C3 - RAG prefetch wiring.** Tests first:
+- [x] **C3 - RAG prefetch wiring.** Tests first:
   `test_partial_prefetch_makes_final_retrieve_a_cache_hit` (scripted
   partial text equals the final; the turn's retrieval returns
   `RagResult(cache_hit=True)` and `LatencyWaterfall.rag_ms` reflects only
@@ -267,7 +267,7 @@ under 1 s of wall time.
   tracked task set. Files: `src/lucy/session.py`,
   `tests/test_speculation.py`. Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass.
-- [ ] **C4 - Speculative suppression.** Tests first:
+- [x] **C4 - Speculative suppression.** Tests first:
   `test_speculative_run_emits_no_tts_speak` (with `enabled_llm_start=True`
   and a stable partial, the gateway simulator records zero `TtsSpeak`
   before `SttFinal`; sentences are in `buffered_directives`) and
@@ -278,7 +278,7 @@ under 1 s of wall time.
   `src/lucy/session.py`, `src/lucy/drivers.py`,
   `tests/test_speculation.py`. Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass.
-- [ ] **C5 - Reconcile: promote and abort.** Tests first:
+- [x] **C5 - Reconcile: promote and abort.** Tests first:
   `test_prefix_match_promotes_in_flight_run` (`reconcile` returns `True`,
   the task object is the same one started on the partial),
   `test_promotion_flushes_buffered_sentences_in_order`,
@@ -289,7 +289,7 @@ under 1 s of wall time.
   card 35 pattern). Implement `async reconcile` plus the `SttFinal`
   branch in `VoiceSession`. Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass.
-- [ ] **C6 - Prompt-cache key plumbing.** Tests first:
+- [x] **C6 - Prompt-cache key plumbing.** Tests first:
   `test_cache_key_stable_within_session_distinct_across_sessions`,
   `test_adapter_payload_carries_cache_key_field_only_when_set`
   (`build_payload` includes `PROMPT_CACHE_FIELD` iff `cache_key` is set),
@@ -300,7 +300,7 @@ under 1 s of wall time.
   simulator recording, and the session plumbing. Files: `src/lucy/llm.py`,
   `src/lucy/session.py`, `tests/test_speculation.py`. Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass.
-- [ ] **C7 - Budget assertions.** Tests first:
+- [x] **C7 - Budget assertions.** Tests first:
   `test_serial_path_fits_latency_budget_defaults` (component fields sum
   to 790, `<= turn_total_ms`; the ManualClock-paced scripted turn fits
   the modeled serial gap) and
@@ -310,7 +310,7 @@ under 1 s of wall time.
   literals. Files: `tests/test_speculation.py`. Verify:
   `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all pass
   (>=16 tests) with total runtime < 1 s (proves no real sleeping).
-- [ ] **C8 - Full suite + bookkeeping.** Run everything, confirm
+- [x] **C8 - Full suite + bookkeeping.** Run everything, confirm
   `shasum src/lucy/rag.py` matches the value recorded in C1, fill
   "Improvements noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green.
@@ -352,27 +352,27 @@ under 1 s of wall time.
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all
+- [x] `.venv/bin/python -m pytest tests/test_speculation.py -q` -> all
       pass (>=16 tests): promotion on prefix match reuses the in-flight
       run (asserted by timing); revision aborts cleanly and nothing
       speculative was ever spoken; the budget table is asserted
       deterministically.
-- [ ] `.venv/bin/python -m pytest tests/test_speculation.py
+- [x] `.venv/bin/python -m pytest tests/test_speculation.py
       tests/test_rag.py -q` -> all pass (existing `SpeculativeRagNode`
       behavior untouched).
-- [ ] `shasum src/lucy/rag.py` -> identical to the checksum recorded in C1
+- [x] `shasum src/lucy/rag.py` -> identical to the checksum recorded in C1
       (`SpeculativeRagNode` reused unchanged).
-- [ ] `.venv/bin/python -c "from lucy.settings import SpeculationSettings;
+- [x] `.venv/bin/python -c "from lucy.settings import SpeculationSettings;
       assert SpeculationSettings().enabled_llm_start is False"` -> exits 0
       (speculative LLM off by default).
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker"
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker"
       tests/test_speculation.py` -> no matches.
-- [ ] `grep -rn "time.sleep\|sleep(0\." tests/test_speculation.py` -> no
+- [x] `grep -rn "time.sleep\|sleep(0\." tests/test_speculation.py` -> no
       matches (no real sleeps in timing tests).
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon
       is available).
-- [ ] Post-task audit done; follow-up cards raised for anything noticed.
+- [x] Post-task audit done; follow-up cards raised for anything noticed.
 
 ## Failure protocol
 
@@ -383,7 +383,23 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- `shasum src/lucy/rag.py` before and after: `c9a10dec81747983b2b70d03da2abc1e58acd488`.
+  `SpeculativeRagNode` was reused unchanged.
+- Added `TurnRecord.rag_cache_hit` so the session can expose whether the
+  final retrieval used a speculative prefetch without changing `src/lucy/rag.py`.
+- `OpenAiCompatibleAdapter._payload` became testable as `build_payload` so the
+  prompt-cache field mapping is covered without network.
+- Verification run with Docker Compose:
+  `docker compose run --rm lucy-api pytest tests/test_speculation.py -q` ->
+  `22 passed`;
+  `docker compose run --rm lucy-api pytest tests/test_speculation.py tests/test_rag.py -q`
+  -> `27 passed`;
+  `docker compose run --rm lucy-api python -c "from lucy.settings import SpeculationSettings; assert SpeculationSettings().enabled_llm_start is False"`
+  -> exit 0;
+  `docker compose run --rm lucy-api ruff check src tests` -> exit 0;
+  `docker compose run --rm lucy-api ruff format --check src tests` -> exit 0;
+  `docker compose run --rm lucy-api mypy src` -> exit 0;
+  `docker compose run --rm lucy-api pytest -q` -> `270 passed, 3 warnings`.
 
 ## Pending human testing
 

@@ -15,13 +15,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Awaitable, Callable, List, Optional, Sequence
+from typing import TYPE_CHECKING, Awaitable, Callable, List, Optional, Sequence
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.drivers import TurnDriver, TurnDriverReport
-from lucy.llm import LlmMessage
+from lucy.llm import LlmMessage, compute_cache_key
 from lucy.metrics import CostBreakdown, LatencyWaterfall
-from lucy.settings import LatencyBudgets
+from lucy.settings import LatencyBudgets, SpeculationSettings
 from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
@@ -36,6 +36,9 @@ from lucy.transport.schema import (
     TtsStreamEnd,
     VadSpeechStart,
 )
+
+if TYPE_CHECKING:
+    from lucy.rag import SpeculativeRagNode
 
 Responder = Callable[[str], Awaitable[str]]
 
@@ -83,6 +86,77 @@ class TurnState(str, Enum):
     SPEAKING = "speaking"
 
 
+class SpeculativeAction(str, Enum):
+    NONE = "none"
+    PREFETCH_RAG = "prefetch_rag"
+    START_LLM = "start_llm"
+
+
+def _normalize_speculative_text(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+class SpeculationController:
+    def __init__(self, settings: SpeculationSettings) -> None:
+        self.settings = settings
+        self._prefetched: set[str] = set()
+        self._trigger_text = ""
+        self._task: Optional[asyncio.Task] = None
+        self._llm_started = False
+
+    @property
+    def speculating(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def on_partial(self, text: str, stability: float) -> SpeculativeAction:
+        normalized = _normalize_speculative_text(text)
+        if (
+            self.settings.enabled_llm_start
+            and stability >= self.settings.llm_start_stability
+            and not self._llm_started
+        ):
+            self._llm_started = True
+            return SpeculativeAction.START_LLM
+        if (
+            self.settings.enabled_rag_prefetch
+            and stability >= self.settings.rag_prefetch_stability
+            and normalized not in self._prefetched
+        ):
+            self._prefetched.add(normalized)
+            return SpeculativeAction.PREFETCH_RAG
+        return SpeculativeAction.NONE
+
+    def start(self, text: str, task: asyncio.Task) -> None:
+        self._trigger_text = text
+        self._task = task
+
+    async def reconcile(self, final: str) -> bool:
+        task = self._task
+        trigger = _normalize_speculative_text(self._trigger_text)
+        final_text = _normalize_speculative_text(final)
+        promoted = bool(task) and bool(trigger) and final_text.startswith(trigger)
+        if task is not None and not promoted:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            await asyncio.sleep(0)
+        self._prefetched.clear()
+        self._trigger_text = ""
+        self._task = None
+        self._llm_started = False
+        return promoted
+
+
+@dataclass
+class TurnContext:
+    turn_id: str
+    speculative: bool = False
+    promoted: asyncio.Event = field(default_factory=asyncio.Event)
+    buffered_directives: list[TtsSpeak] = field(default_factory=list)
+
+
 @dataclass
 class TurnRecord:
     turn_id: str
@@ -91,6 +165,7 @@ class TurnRecord:
     interrupted: bool
     waterfall: LatencyWaterfall
     cost: Optional[CostBreakdown] = None
+    rag_cache_hit: bool = False
 
 
 @dataclass
@@ -109,6 +184,8 @@ class _ActiveTurn:
     llm_ms: float = 0.0
     llm_cost: float = 0.0
     mcp_tools_ms: float = 0.0
+    rag_ms: float = 0.0
+    rag_cache_hit: bool = False
     clock_start: float = 0.0
     barrier_sent: bool = False  # tts.stream_end sent exactly once per turn
     planner: Optional[TtsPlanner] = None  # set in driver mode
@@ -132,6 +209,8 @@ class VoiceSession:
         tracer=None,
         clock: Optional[Clock] = None,
         budgets: Optional[LatencyBudgets] = None,
+        speculation: Optional[SpeculationSettings] = None,
+        rag: "SpeculativeRagNode | None" = None,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -143,11 +222,18 @@ class VoiceSession:
         self.tracer = tracer
         self.clock = clock or MonotonicClock()
         self.budgets = budgets or LatencyBudgets()
+        self.speculation = speculation or SpeculationSettings()
+        self.rag = rag
         self.state = TurnState.IDLE
         self.transitions: List[TurnState] = [TurnState.IDLE]
         self.spans: List[Span] = []
         self._history: List[LlmMessage] = []
         self._background_tasks: "set[asyncio.Task]" = set()
+        self._prefetch_tasks: "set[asyncio.Task]" = set()
+        self._cache_key = compute_cache_key(session_id, "")
+        cache_key_setter = getattr(self.driver, "set_cache_key", None)
+        if cache_key_setter is not None:
+            cache_key_setter(self._cache_key)
 
     def _set_state(self, state: TurnState) -> None:
         if state != self.state:
@@ -160,6 +246,9 @@ class VoiceSession:
         tree = TurnSpanTree(self.session_id)
         started = False
         last_ts = 0
+        controller = SpeculationController(self.speculation)
+        speculative_turn: Optional[_ActiveTurn] = None
+        speculative_context: Optional[TurnContext] = None
 
         async for event in self.transport.events():
             payload = event.payload
@@ -170,6 +259,32 @@ class VoiceSession:
 
             if isinstance(payload, SttPartial):
                 self._set_state(TurnState.LISTENING)
+                action = controller.on_partial(payload.text, payload.stability)
+                if action == SpeculativeAction.PREFETCH_RAG and self.rag is not None:
+                    self._track_prefetch(
+                        asyncio.create_task(self.rag.prefetch(payload.text))
+                    )
+                elif (
+                    action == SpeculativeAction.START_LLM
+                    and self.driver is not None
+                    and speculative_turn is None
+                ):
+                    speculative_turn = _ActiveTurn(
+                        turn_id=event.envelope.turn_id or "turn",
+                        user_text=payload.text,
+                        stt_ms=0,
+                        stt_final_ms=event.envelope.ts_ms,
+                        started_ms=event.envelope.ts_ms,
+                        clock_start=self.clock.monotonic(),
+                    )
+                    speculative_context = TurnContext(
+                        turn_id=speculative_turn.turn_id,
+                        speculative=True,
+                    )
+                    speculative_turn.task = asyncio.create_task(
+                        self._run_driver_turn(speculative_turn, speculative_context)
+                    )
+                    controller.start(payload.text, speculative_turn.task)
 
             elif isinstance(payload, SttFinal):
                 if active is not None:
@@ -180,6 +295,32 @@ class VoiceSession:
                     active.ended_ms = active.ended_ms or event.envelope.ts_ms
                     await self._cancel_task(active)
                     self._complete(active, tree, records)
+                promoted = await controller.reconcile(payload.text)
+                if promoted and speculative_turn is not None:
+                    active = speculative_turn
+                    active.user_text = payload.text
+                    active.stt_ms = payload.stt_ms
+                    active.stt_final_ms = event.envelope.ts_ms
+                    active.started_ms = max(0, event.envelope.ts_ms - payload.stt_ms)
+                    if speculative_context is not None:
+                        speculative_context.speculative = False
+                        speculative_context.promoted.set()
+                        for directive in speculative_context.buffered_directives:
+                            await self._send_tts_speak(
+                                active, directive, speculative_context
+                            )
+                        speculative_context.buffered_directives.clear()
+                    await self._retrieve_rag(active)
+                    if active.task is not None and active.task.done():
+                        await self._await_task(active)
+                        await self._send_stream_end(active)
+                    self._set_state(TurnState.THINKING)
+                    speculative_turn = None
+                    speculative_context = None
+                    continue
+
+                speculative_turn = None
+                speculative_context = None
                 ts = event.envelope.ts_ms
                 active = _ActiveTurn(
                     turn_id=event.envelope.turn_id or "turn",
@@ -233,6 +374,8 @@ class VoiceSession:
             await self._cancel_task(active)
             self._complete(active, tree, records)
 
+        if self._prefetch_tasks:
+            await asyncio.gather(*list(self._prefetch_tasks), return_exceptions=True)
         if self._background_tasks:
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
 
@@ -262,6 +405,7 @@ class VoiceSession:
     async def _run_turn(self, turn: _ActiveTurn) -> None:
         assert self.responder is not None
         try:
+            await self._retrieve_rag(turn)
             llm_start = self.clock.monotonic()
             turn.assistant_text = await self.responder(turn.user_text)
             turn.llm_ms = (self.clock.monotonic() - llm_start) * 1000
@@ -271,21 +415,14 @@ class VoiceSession:
                 flush=False,
             )
             turn.utterance_texts.append((utterance.utterance_id, utterance.text))
-            await self.transport.send(
-                Envelope(
-                    type="tts.speak",
-                    session_id=self.session_id,
-                    turn_id=turn.turn_id,
-                    seq=0,
-                    ts_ms=0,
-                ),
-                utterance,
-            )
+            await self._send_tts_speak(turn, utterance)
         finally:
             await self._send_stream_end(turn)
         await turn.playback_finished.wait()
 
-    async def _run_driver_turn(self, turn: _ActiveTurn) -> None:
+    async def _run_driver_turn(
+        self, turn: _ActiveTurn, context: TurnContext | None = None
+    ) -> None:
         assert self.driver is not None
         turn.planner = TtsPlanner()
         adopter = getattr(self.driver, "set_background_task_adopter", None)
@@ -293,8 +430,9 @@ class VoiceSession:
             adopter(lambda task: self._adopt_background_task(turn, task))
         first_tts = True
         try:
+            await self._retrieve_rag(turn)
             async for event in self.driver.run_turn(
-                turn.user_text, list(self._history)
+                turn.user_text, list(self._history), turn_context=context
             ):
                 if isinstance(event, TtsSpeak):
                     turn.utterance_texts.append((event.utterance_id, event.text))
@@ -302,24 +440,45 @@ class VoiceSession:
                     if first_tts:
                         self._set_state(TurnState.SPEAKING)  # THINKING -> SPEAKING
                         first_tts = False
-                    await self.transport.send(
-                        Envelope(
-                            type="tts.speak",
-                            session_id=self.session_id,
-                            turn_id=turn.turn_id,
-                            seq=0,
-                            ts_ms=0,
-                        ),
-                        event,
-                    )
+                    await self._send_tts_speak(turn, event, context)
                 elif isinstance(event, TurnDriverReport):
                     turn.assistant_text = event.assistant_text
                     turn.llm_ms = event.llm_ms
                     turn.llm_cost = event.llm_cost
                     turn.mcp_tools_ms = event.mcp_tools_ms
         finally:
-            await self._send_stream_end(turn)
-        await turn.playback_finished.wait()
+            if context is None or not context.speculative:
+                await self._send_stream_end(turn)
+        if context is None or not context.speculative:
+            await turn.playback_finished.wait()
+
+    async def _send_tts_speak(
+        self,
+        turn: _ActiveTurn,
+        utterance: TtsSpeak,
+        context: TurnContext | None = None,
+    ) -> None:
+        if context is not None and context.speculative:
+            context.buffered_directives.append(utterance)
+            return
+        await self.transport.send(
+            Envelope(
+                type="tts.speak",
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                seq=0,
+                ts_ms=0,
+            ),
+            utterance,
+        )
+
+    async def _retrieve_rag(self, turn: _ActiveTurn) -> None:
+        if self.rag is None:
+            return
+        started = self.clock.monotonic()
+        result = await self.rag.prefetch(turn.user_text)
+        turn.rag_ms = (self.clock.monotonic() - started) * 1000.0
+        turn.rag_cache_hit = result.cache_hit
 
     async def _interrupt(
         self,
@@ -397,6 +556,18 @@ class VoiceSession:
 
         task.add_done_callback(_finish)
 
+    def _track_prefetch(self, task: asyncio.Task) -> None:
+        self._prefetch_tasks.add(task)
+
+        def _discard(done: asyncio.Task) -> None:
+            self._prefetch_tasks.discard(done)
+            try:
+                done.result()
+            except (asyncio.CancelledError, Exception):
+                return
+
+        task.add_done_callback(_discard)
+
     def _finalize(self, turn: _ActiveTurn, tree: TurnSpanTree) -> TurnRecord:
         if turn.planner is not None:
             assistant_text = (
@@ -418,7 +589,7 @@ class VoiceSession:
             cost = None
         waterfall = LatencyWaterfall(
             stt_ms=turn.stt_ms,
-            rag_ms=0.0,
+            rag_ms=turn.rag_ms,
             llm_ms=turn.llm_ms,
             mcp_tools_ms=turn.mcp_tools_ms,
             tts_ms=float(turn.tts_ms),
@@ -432,6 +603,7 @@ class VoiceSession:
             interrupted=turn.interrupted,
             waterfall=waterfall,
             cost=cost,
+            rag_cache_hit=turn.rag_cache_hit,
         )
 
     def _record_spans(self, turn: _ActiveTurn, tree: TurnSpanTree) -> None:

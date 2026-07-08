@@ -7,6 +7,7 @@ any field from the environment with the ``LUCY_BUDGET_`` prefix, e.g.
 
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,23 @@ class LatencyBudgets(BaseSettings):
     gateway_pacing_ms: int = 30  # gateway playback pacing granularity
     turn_total_ms: int = 800  # end-to-end p50 turn budget
     max_tool_rounds_per_turn: int = 3  # tool-call rounds before forcing a reply
+
+
+class SpeculationSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LUCY_SPECULATION_", extra="ignore")
+
+    enabled_rag_prefetch: bool = True
+    enabled_llm_start: bool = False
+    rag_prefetch_stability: float = 0.6
+    llm_start_stability: float = 0.9
+
+    @model_validator(mode="after")
+    def _validate_threshold_order(self) -> "SpeculationSettings":
+        if not (0.0 <= self.rag_prefetch_stability <= self.llm_start_stability <= 1.0):
+            raise ValueError(
+                "expected 0.0 <= rag_prefetch_stability <= llm_start_stability <= 1.0"
+            )
+        return self
 
 
 class LlmPricing(BaseSettings):
