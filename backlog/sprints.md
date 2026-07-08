@@ -17,7 +17,7 @@ order unless the dependency notes say a sprint can start early.
 | S7 Cloud observability seam | Platform | 30, 47*, 48* | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard |
 | S8 Launch | Launch | 46, 49, 50 | Public repo installable: `pip install` + quickstart from scratch on a clean machine |
 | S9 Analytics & SRE observability | Platform/Runtime | 52, 53, 54, 55, 56, 57, 58*, 59*, 60* | Local run serves an analytics-model-v1 rollup at `/analytics` and a Grafana board renders RED/USE metrics from `/metrics/prometheus`; with `LUCY_API_KEY` set, the same events land in the platform warehouse and a cross-run funnel/cost board renders |
-| S10 Agent operations | Process | 61, 62, 63 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image |
+| S10 Agent operations | Process | 61, 62, 63, 65 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image; clean API builds keep the Docker context lean |
 
 Cards marked `*` live in `lucy-platform/backlog/` (47 ingest v0, 48 dashboard
 on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,

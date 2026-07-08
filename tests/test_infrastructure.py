@@ -32,6 +32,7 @@ def test_docker_compose_defines_lucy_local_stack():
 
 def test_dockerfiles_and_otel_config_exist():
     for path in [
+        ".dockerignore",
         "Dockerfile.api",
         "media-gateway-rust/Dockerfile",
         "media-gateway-rust/Cargo.toml",
@@ -48,3 +49,38 @@ def test_rust_media_gateway_exposes_health_contract():
     assert "lucy-media-gateway" in source
     assert '"/health"' in source
     assert "8081" in source
+
+
+def test_dockerignore_keeps_build_context_lean_without_hiding_project_sources():
+    patterns = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+
+    for pattern in {
+        ".git/",
+        ".venv/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        ".mypy_cache/",
+        "dist/",
+        "build/",
+        "*.egg-info/",
+        ".env",
+        "node_modules/",
+        ".next/",
+        "coverage/",
+        "htmlcov/",
+        "target/",
+    }:
+        assert pattern in patterns
+
+    for project_path in {
+        "src/",
+        "tests/",
+        "docs/",
+        "backlog/",
+        "examples/",
+        "infra/",
+        "media-gateway-rust/",
+        "pyproject.toml",
+        "README.md",
+    }:
+        assert project_path not in patterns
