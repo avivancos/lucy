@@ -8,8 +8,8 @@ real call with zero keys and zero wall-clock time.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import AsyncIterator, Iterable, List, Optional, Sequence, Tuple
 
 from lucy.clock import Clock, ManualClock
 from lucy.drivers import TurnDriver
@@ -17,9 +17,10 @@ from lucy.evals import EvalEvidence, SyntheticCallScenario
 from lucy.metrics import LatencyWaterfall
 from lucy.session import Responder, TurnRecord, VoiceSession
 from lucy.settings import LatencyBudgets
+from lucy.state import Checkpoint, ConversationState
 from lucy.tracing import Span
 from lucy.transport.dev_gateway import LocalGatewaySimulator
-from lucy.transport.schema import ControlEvent, TtsCancel, TtsSpeak
+from lucy.transport.schema import ControlEvent, Envelope, SttFinal, TtsCancel, TtsSpeak
 
 
 @dataclass
@@ -29,6 +30,33 @@ class HarnessResult:
     spans: List[Span]
     waterfalls: List[LatencyWaterfall]
     directives: List[ControlEvent]
+    events: List[ControlEvent] = field(default_factory=list)
+    checkpoints: List[Checkpoint] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReplayResult:
+    final_state: ConversationState
+    matches_final_checkpoint: bool
+    diverged_at_checkpoint_id: Optional[str]
+
+
+class _RecordingTransport:
+    def __init__(self, gateway: LocalGatewaySimulator) -> None:
+        self.gateway = gateway
+        self.events_seen: List[ControlEvent] = []
+
+    @property
+    def sent(self) -> List[ControlEvent]:
+        return self.gateway.sent
+
+    async def events(self) -> AsyncIterator[ControlEvent]:
+        async for event in self.gateway.events():
+            self.events_seen.append(event)
+            yield event
+
+    async def send(self, envelope: Envelope, payload: object) -> None:
+        await self.gateway.send(envelope, payload)
 
 
 class ConversationHarness:
@@ -57,9 +85,10 @@ class ConversationHarness:
             barge_in_turns=barge_in_turns,
             vad_interrupt_turns=vad_interrupt_turns,
         )
+        transport = _RecordingTransport(gateway)
         session = VoiceSession(
             self.session_id,
-            gateway,
+            transport,
             responder,
             driver=driver,
             tracer=tracer,
@@ -67,6 +96,10 @@ class ConversationHarness:
             budgets=budgets,
         )
         records = await session.run()
+        checkpoints: List[Checkpoint] = []
+        checkpointer = getattr(driver, "checkpointer", None) if driver else None
+        if checkpointer is not None:
+            checkpoints = await checkpointer.history(self.session_id)
 
         transcript: List[Tuple[str, str]] = []
         for record in records:
@@ -79,6 +112,66 @@ class ConversationHarness:
             spans=session.spans,
             waterfalls=[record.waterfall for record in records],
             directives=list(gateway.sent),
+            events=list(transport.events_seen),
+            checkpoints=checkpoints,
+        )
+
+    def replay(
+        self,
+        checkpoints: Sequence[Checkpoint],
+        recorded_events: Sequence[ControlEvent],
+    ) -> ReplayResult:
+        from lucy.graph import GraphValidationError
+
+        if not checkpoints:
+            return ReplayResult(
+                final_state=ConversationState(),
+                matches_final_checkpoint=True,
+                diverged_at_checkpoint_id=None,
+            )
+
+        session_id = checkpoints[0].session_id
+        last_superstep_by_turn: dict[str, int] = {}
+        closed_turns: set[str] = set()
+        for checkpoint in checkpoints:
+            if checkpoint.session_id != session_id:
+                raise GraphValidationError("replay checkpoints span sessions")
+            previous = last_superstep_by_turn.get(checkpoint.turn_id)
+            if previous is not None and checkpoint.superstep < previous:
+                raise GraphValidationError("checkpoint supersteps are not monotonic")
+            if checkpoint.turn_id in closed_turns:
+                raise GraphValidationError("checkpoint turn order is not monotonic")
+            last_superstep_by_turn[checkpoint.turn_id] = checkpoint.superstep
+            if checkpoint.kind == "turn_final":
+                closed_turns.add(checkpoint.turn_id)
+
+        recorded_callers = [
+            event.payload.text
+            for event in recorded_events
+            if isinstance(event.payload, SttFinal)
+        ]
+        final_state = ConversationState()
+        for checkpoint in checkpoints:
+            if checkpoint.kind != "turn_final":
+                continue
+            final_state = checkpoint.state
+            caller_lines = [
+                line.text for line in final_state.transcript if line.speaker == "caller"
+            ]
+            if caller_lines != recorded_callers[: len(caller_lines)]:
+                return ReplayResult(
+                    final_state=final_state,
+                    matches_final_checkpoint=False,
+                    diverged_at_checkpoint_id=checkpoint.checkpoint_id,
+                )
+
+        last_checkpoint = checkpoints[-1]
+        matches = final_state == last_checkpoint.state
+        diverged_at = None if matches else last_checkpoint.checkpoint_id
+        return ReplayResult(
+            final_state=final_state,
+            matches_final_checkpoint=matches,
+            diverged_at_checkpoint_id=diverged_at,
         )
 
 

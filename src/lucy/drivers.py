@@ -22,6 +22,7 @@ from typing import (
     Optional,
     Protocol,
     Sequence,
+    TYPE_CHECKING,
     Union,
 )
 
@@ -38,10 +39,16 @@ from lucy.llm import (
     resolve_llm,
 )
 from lucy.providers import ModelRegistry
+from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, LlmPricing
 from lucy.speech import MIN_FLUSH_CHARS, SentenceAssembler, TtsPlanner
+from lucy.state import Checkpoint, CheckpointStore, ConversationState, TranscriptLine
+from lucy.state import checkpoint_id
 from lucy.tools import BargeInPolicy, FillerPolicy, McpToolExecutor, ToolDef, ToolResult
 from lucy.transport.schema import TtsSpeak
+
+if TYPE_CHECKING:
+    from lucy.graph import CompiledAgentGraph
 
 
 @dataclass(frozen=True)
@@ -228,3 +235,140 @@ class CascadedTurnDriver:
         return (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k + (
             usage.completion_tokens / 1000.0
         ) * self._pricing.completion_per_1k
+
+
+class GraphTurnDriver:
+    def __init__(
+        self,
+        graph: "CompiledAgentGraph[ConversationState]",
+        *,
+        session_id: str,
+        clock: Clock,
+        state: Optional[ConversationState] = None,
+    ) -> None:
+        self.graph = graph
+        self.session_id = session_id
+        self.clock = clock
+        self.state = state or ConversationState()
+
+    @property
+    def checkpointer(self) -> Optional[CheckpointStore]:
+        return self.graph.checkpointer
+
+    async def run_turn(
+        self,
+        user_text: str,
+        history: Sequence[LlmMessage],
+        *,
+        turn_context: object | None = None,
+    ) -> AsyncIterator[DriverEvent]:
+        turn_id = "turn-%d" % (self.state.turns + 1)
+        working_state = self.state.merged(
+            {
+                "transcript": [
+                    *self.state.transcript,
+                    TranscriptLine(speaker="caller", text=user_text),
+                ]
+            }
+        )
+        queue: "asyncio.Queue[TtsSpeak]" = asyncio.Queue()
+
+        def emit(event: object) -> None:
+            if isinstance(event, TtsSpeak):
+                queue.put_nowait(event)
+
+        ctx = TurnContext(
+            payload={"user_text": user_text},
+            session_id=self.session_id,
+            turn_id=turn_id,
+            clock=self.clock,
+            emit=emit,
+        )
+        task = asyncio.create_task(self.graph.invoke_turn(working_state, ctx))
+        final_state: Optional[ConversationState] = None
+        try:
+            while True:
+                if task.done() and queue.empty():
+                    break
+                get_task = asyncio.create_task(queue.get())
+                done, pending = await asyncio.wait(
+                    {task, get_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if get_task in done:
+                    yield get_task.result()
+                else:
+                    get_task.cancel()
+                    await asyncio.gather(get_task, return_exceptions=True)
+                if task in done:
+                    final_state = task.result()
+                for item in pending:
+                    if item is get_task and not get_task.done():
+                        get_task.cancel()
+                        await asyncio.gather(get_task, return_exceptions=True)
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+
+        if final_state is None:
+            final_state = task.result()
+        self.state = final_state
+        await self._save_turn_final(turn_id, final_state)
+        yield self._report_from_state(final_state)
+
+    async def _save_turn_final(self, turn_id: str, state: ConversationState) -> None:
+        checkpointer = self.graph.checkpointer
+        if checkpointer is None:
+            return
+        history = await checkpointer.history(self.session_id)
+        last_superstep = max(
+            (
+                checkpoint.superstep
+                for checkpoint in history
+                if checkpoint.turn_id == turn_id
+            ),
+            default=0,
+        )
+        final_superstep = last_superstep + 1
+        await checkpointer.save(
+            Checkpoint(
+                checkpoint_id=checkpoint_id(self.session_id, turn_id, final_superstep),
+                session_id=self.session_id,
+                turn_id=turn_id,
+                superstep=final_superstep,
+                kind="turn_final",
+                state=state,
+                created_at_ms=int(self.clock.monotonic() * 1000),
+            )
+        )
+
+    def _report_from_state(self, state: ConversationState) -> TurnDriverReport:
+        report = state.agent_state.get("last_turn_report", {})
+        assistant_text = str(report.get("assistant_text", ""))
+        if not assistant_text:
+            agent_lines = [
+                line.text for line in state.transcript if line.speaker == "agent"
+            ]
+            assistant_text = agent_lines[-1] if agent_lines else ""
+        return TurnDriverReport(
+            assistant_text=assistant_text,
+            llm_ms=float(report.get("llm_ms", 0.0)),
+            usage=None,
+            llm_cost=float(report.get("llm_cost", 0.0)),
+            mcp_tools_ms=float(report.get("mcp_tools_ms", 0.0)),
+        )
+
+    @classmethod
+    async def resume(
+        cls,
+        graph: "CompiledAgentGraph[ConversationState]",
+        *,
+        session_id: str,
+        store: CheckpointStore,
+        clock: Clock,
+    ) -> "GraphTurnDriver":
+        latest = await store.load_latest(session_id)
+        state = latest.state if latest is not None else ConversationState()
+        return cls(graph, session_id=session_id, clock=clock, state=state)

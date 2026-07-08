@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
+from lucy.clock import Clock, MonotonicClock
 from lucy.observe import Tracer, get_tracer
 
 
@@ -25,11 +26,21 @@ class TraceEvent:
 
 @dataclass
 class GraphContext:
-    payload: Dict[str, Any]
+    payload: Dict[str, Any] = field(default_factory=dict)
     results: Dict[str, Any] = field(default_factory=dict)
     trace: List[TraceEvent] = field(default_factory=list)
     session_id: str = ""
     turn_id: str = ""
+
+
+@dataclass
+class TurnContext(GraphContext):
+    emit: Optional[Callable[[Any], None]] = None
+    cancellation: asyncio.Event = field(default_factory=asyncio.Event)
+    clock: Clock = field(default_factory=MonotonicClock)
+    speculative: bool = False
+    promoted: asyncio.Event = field(default_factory=asyncio.Event)
+    buffered_directives: List[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -59,8 +70,20 @@ class GraphExecutor:
         *,
         session_id: str = "",
         turn_id: str = "",
+        context: Optional[GraphContext] = None,
     ) -> GraphContext:
-        context = GraphContext(payload=payload, session_id=session_id, turn_id=turn_id)
+        if context is None:
+            context = GraphContext(
+                payload=payload,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+        else:
+            context.payload.update(payload)
+            if session_id:
+                context.session_id = session_id
+            if turn_id:
+                context.turn_id = turn_id
         if any(node.depends_on for node in self.nodes):
             await self._run_dag(context)
             return context

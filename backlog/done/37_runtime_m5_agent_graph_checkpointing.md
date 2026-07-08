@@ -4,7 +4,7 @@
 **Epic:** Voice runtime
 **Estimated effort:** ~10 h
 **Depends on:** 36
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -387,7 +387,7 @@ Read, in this order, before writing anything:
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_agent_graph.py
+- [x] `.venv/bin/python -m pytest tests/test_agent_graph.py
       tests/test_checkpointing.py -q` -> all pass (>=18 tests), including
       `test_custom_graph_conditional_edge_routes_real_harness_call`
       (a custom graph with a conditional edge routes a real harness call),
@@ -395,16 +395,16 @@ Read, in this order, before writing anything:
       mid-call from `load_latest` continues the conversation), and
       `test_replay_reproduces_identical_final_state` (replay reproduces
       identical state from checkpoints + recorded events).
-- [ ] `.venv/bin/python -m pytest tests/test_runtime.py -q` -> all pass
+- [x] `.venv/bin/python -m pytest tests/test_runtime.py -q` -> all pass
       with the test file unmodified (executor reused, not rewritten).
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_agent_graph.py
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_agent_graph.py
       tests/test_checkpointing.py` -> no matches.
-- [ ] `grep -rn "uuid4\|time.time()" src/lucy/graph.py src/lucy/state.py`
+- [x] `grep -rn "uuid4\|time.time()" src/lucy/graph.py src/lucy/state.py`
       -> no matches (replay determinism).
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon is
       available).
-- [ ] Post-task audit done; follow-up cards raised for anything noticed.
+- [x] Post-task audit done; follow-up cards raised for anything noticed.
 
 ## Failure protocol
 
@@ -415,7 +415,12 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- Folded the provisional speculation `TurnContext` into `lucy.runtime.TurnContext`
+  and kept the existing `promoted`/`buffered_directives` fields there for
+  backward-compatible speculative runs.
+- `HarnessResult.events` records `ControlEvent` values rather than bare
+  envelopes, because replay needs the typed `SttFinal` payload text. No
+  follow-up card needed.
 
 ## Pending human testing
 

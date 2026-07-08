@@ -21,6 +21,7 @@ from lucy.clock import Clock, MonotonicClock
 from lucy.drivers import TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage, compute_cache_key
 from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, SpeculationSettings
 from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
@@ -150,14 +151,6 @@ class SpeculationController:
 
 
 @dataclass
-class TurnContext:
-    turn_id: str
-    speculative: bool = False
-    promoted: asyncio.Event = field(default_factory=asyncio.Event)
-    buffered_directives: list[TtsSpeak] = field(default_factory=list)
-
-
-@dataclass
 class TurnRecord:
     turn_id: str
     user_text: str
@@ -278,7 +271,10 @@ class VoiceSession:
                         clock_start=self.clock.monotonic(),
                     )
                     speculative_context = TurnContext(
+                        payload={"user_text": payload.text},
+                        session_id=self.session_id,
                         turn_id=speculative_turn.turn_id,
+                        clock=self.clock,
                         speculative=True,
                     )
                     speculative_turn.task = asyncio.create_task(

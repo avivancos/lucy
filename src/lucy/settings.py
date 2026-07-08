@@ -42,6 +42,12 @@ class SpeculationSettings(BaseSettings):
         return self
 
 
+class GraphLimits(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LUCY_GRAPH_", extra="ignore")
+
+    max_supersteps_per_turn: int = 16
+
+
 class LlmPricing(BaseSettings):
     """Per-1k-token prices for cost accounting. Zero defaults - no invented
     prices; override from the environment with the ``LUCY_LLM_PRICE_`` prefix."""
