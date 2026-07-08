@@ -1,4 +1,5 @@
 import asyncio
+from typing import cast
 
 import pytest
 
@@ -34,9 +35,19 @@ from lucy.tools import (
 
 
 def _profile(**kw) -> ToolProfile:
-    base = dict(expected_latency_ms=100, deadline_ms=1000)
+    base: dict[str, object] = {
+        "expected_latency_ms": 100,
+        "deadline_ms": 1000,
+        "on_barge_in": BargeInPolicy.CANCEL,
+        "speak_filler": False,
+    }
     base.update(kw)
-    return ToolProfile(**base)
+    return ToolProfile(
+        expected_latency_ms=cast(int, base["expected_latency_ms"]),
+        deadline_ms=cast(int, base["deadline_ms"]),
+        on_barge_in=cast(BargeInPolicy, base["on_barge_in"]),
+        speak_filler=cast(bool, base["speak_filler"]),
+    )
 
 
 def _tool(server="crm", name="book_meeting", **profile_kw) -> ToolDef:

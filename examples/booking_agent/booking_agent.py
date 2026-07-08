@@ -17,7 +17,9 @@ ALLOWED_TOOLS = ["crm.upsert_lead", "calendar.hold_slot"]
 
 async def main() -> None:
     spec = LucySpec(
-        agent=AgentSpec(name="Booking Agent", goal="Book a meeting.", prompt="Qualify and book."),
+        agent=AgentSpec(
+            name="Booking Agent", goal="Book a meeting.", prompt="Qualify and book."
+        ),
         voice=VoiceSpec(transport="sim", stt_provider="local", tts_provider="local"),
     )
     agent = VoiceAgent(spec)
@@ -29,13 +31,18 @@ async def main() -> None:
         )
         await session.synthesize(session.last_response or "Sure, let's book it.")
         lead = await mcp.call_tool(
-            "crm", "upsert_lead", {"lead_id": "lead_demo", "booking_status": "held"},
-            session_id="booking-session", turn_id="booking-session-t0",
+            "crm",
+            "upsert_lead",
+            {"lead_id": "lead_demo", "booking_status": "held"},
+            session_id="booking-session",
+            turn_id="booking-session-t0",
         )
         slot = await mcp.call_tool(
-            "calendar", "hold_slot",
+            "calendar",
+            "hold_slot",
             {"lead_id": "lead_demo", "requested_slot": "2026-06-09T10:00:00+02:00"},
-            session_id="booking-session", turn_id="booking-session-t0",
+            session_id="booking-session",
+            turn_id="booking-session-t0",
         )
         print("crm upsert:", lead)
         print("calendar hold:", slot)

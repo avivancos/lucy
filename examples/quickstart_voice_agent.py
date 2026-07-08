@@ -1,7 +1,4 @@
-"""Quickstart: a working voice agent in under 30 lines, no API keys, no network.
-
-Run it:  python examples/quickstart_voice_agent.py
-"""
+"""Quickstart: a working voice agent in under 30 lines, no API keys, no network."""
 
 import asyncio
 
@@ -10,7 +7,9 @@ from lucy import AgentSpec, AudioChunk, LucySpec, VoiceAgent, VoiceSpec
 
 async def main() -> None:
     spec = LucySpec(
-        agent=AgentSpec(name="Quickstart Agent", goal="Help the caller.", prompt="Be helpful."),
+        agent=AgentSpec(
+            name="Quickstart Agent", goal="Help the caller.", prompt="Be helpful."
+        ),
         voice=VoiceSpec(transport="sim", stt_provider="local", tts_provider="local"),
     )
     agent = VoiceAgent(spec)  # console trace exporter by default
