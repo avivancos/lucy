@@ -101,6 +101,24 @@ def test_every_existing_card_is_mapped_to_exactly_one_sprint():
     assert not orphans, f"cards not mapped to any sprint in sprints.md: {orphans}"
 
 
+def test_sprint_index_non_platform_cards_exist_locally():
+    text = (BACKLOG / "sprints.md").read_text(encoding="utf-8")
+    rows = re.findall(r"^\| S\d+ [^|]*\| [^|]*\| ([^|]*)\|", text, re.M)
+    existing = {
+        card_id(path)
+        for state in STATE_DIRS
+        for path in (BACKLOG / state).glob("[0-9]*_*.md")
+    }
+    missing = []
+    for row in rows:
+        for number, platform_marker in re.findall(r"\b(\d{2})(\*)?", row):
+            card = int(number)
+            if not platform_marker and card not in existing:
+                missing.append(card)
+
+    assert not missing, f"sprints.md lists local cards with no file: {missing}"
+
+
 def test_upgraded_pending_cards_follow_the_junior_standard():
     problems = []
     valid_sprints = sprint_ids_from_index()
