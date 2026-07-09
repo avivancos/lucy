@@ -13,32 +13,48 @@ order unless the dependency notes say a sprint can start early.
 | S3 Conversational correctness | Runtime | 35, 36, 31 | booking_interruption eval green; <800 ms p50 budget asserted with ManualClock; traces visible in `lucy dev` viewer |
 | S4 Graph and state | Runtime | 37, 39 | Prebuilt `booking_agent()` passes all six golden scenarios; kill/resume mid-call works |
 | S5 Native telephony | Telephony | 40, 41, 42, 43, 44, 45 | Real call softphone -> Asterisk -> Lucy locally; real PSTN call via CPaaS with a Spanish DID |
-| S6 Provider ecosystem | Providers | 28, 29, 38, 51 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers |
-| S7 Cloud observability seam | Platform | 30, 47*, 48* | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard |
-| S8 Launch | Launch | 46, 49, 50 | Public repo installable: `pip install` + quickstart from scratch on a clean machine |
-| S9 Analytics & SRE observability | Platform/Runtime | 52, 53, 54, 55, 56, 57, 58*, 59*, 60* | Local run serves an analytics-model-v1 rollup at `/analytics` and a Grafana board renders RED/USE metrics from `/metrics/prometheus`; with `LUCY_API_KEY` set, the same events land in the platform warehouse and a cross-run funnel/cost board renders |
+| S6 Provider ecosystem | Providers | 28, 29, 38, 51, 68 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers; routed LLM fallback spans are observable |
+| S7 Cloud observability seam | Platform | 30, 47*, 48*, 72, 73 | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard; run identity, tags, and blob presign are wired |
+| S8 Launch | Launch | 46, 49, 50, 93 | Public repo installable: `pip install` + quickstart from scratch on a clean machine; launch-base hygiene removed stale API shims |
+| S9 Analytics & SRE observability | Platform/Runtime | 52, 53, 54, 55, 56, 57, 66, 67 | Local run serves an analytics-model-v1 rollup at `/analytics`, Grafana renders RED/USE metrics, and the SDK emits full voice costs with local budget enforcement |
 | S10 Agent operations | Process | 61, 62, 63, 65 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image; clean API builds keep the Docker context lean |
+| S11 Platform feed (SDK) | Runtime/Observability | 69, 70, 71 | A simulated call records dual-leg WAVs through LocalGatewaySimulator to a local blob server; `audio_ref` + `cost` + tagged events land in JSONL; the session resumes from Postgres after a process restart |
+| S12 Platform core | Platform | 74*, 75*, 76* | Compose brings up platform Postgres and MinIO; a key is minted; replayed fixtures land in Postgres; a second project's key proves tenant isolation |
+| S13 Trace explorer, recordings, live ops | Platform | 77*, 78*, 79*, 80*, 81*, 82* | Click a session to see turn/span tree, transcript, synced audio playback, waterfall, FTS search, and live replay updates |
+| S14 Money & analytics | Platform | 83*, 58*, 59*, 60*, 84* | Cost Board shows the seven-component split and booked-vs-failed over replayed runs; `/spend?group_by=agent` matches fixture totals; analytics boards render from the semantic API |
+| S15 Evals, alerts & hardening | Platform | 85*, 86*, 87*, 88*, 89*, 90*, 91*, 92* | Two eval runs upload from the SDK harness and diff with regression badges; a cost alert fires a webhook; viewer RBAC and RLS block cross-tenant access |
 
 Cards marked `*` live in `lucy-platform/backlog/` (47 ingest v0, 48 dashboard
 on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
-60 analytics BI dashboards), not in this repo.
+60 analytics BI dashboards, and platform cards 74-92), not in this repo.
 
 ## Dependency notes
 
 - S2 -> S3 -> S4 are strictly sequential (each builds on the previous
   runtime layer).
-- S5 can start as soon as card 32 (S2) lands: the transports adapt the
-  control-channel schema defined there.
-- S6 needs S4 (plugins resolve into the full runtime); card 51 (Rust gateway)
-  only needs card 32's schema and can run as a parallel track.
-- S7 needs S1 (the `lucy.observe` seam) and can run parallel to S2-S6.
+- S5 is intentionally parked until the S13 platform demo, then runs 40 -> 41
+  -> 42, with 43/44/45 scoped from the S5 findings. The transports still adapt
+  the control-channel schema defined in S2.
+- S6 needs S4 (plugins resolve into the full runtime). Card 51 must wait until
+  card 70 lands so Rust/Python golden control-channel fixtures include recording
+  messages.
+- S7 needs S1 (the `lucy.observe` seam). Card 72 should run before cards 66,
+  70, and the platform schema. Card 73 needs card 30, card 71, and platform
+  card 79.
 - S8 is last and gates on everything shipped in S1-S7 that the launch story
-  demos.
-- S9 open cards (52-57) need S1 (the `lucy.observe` seam, cards 24/25) and can
-  run parallel to S5-S7; the platform cards 58*-60* need S7 (the cloud seam,
-  cards 30/47). S9 is not an S8 launch gate.
+  demos; card 93 closes stale runtime shims before the public ABI freezes.
+- S9 open cards (52-57, 66-67) need S1 (the `lucy.observe` seam, cards 24/25)
+  and can run before the parked telephony lane. Platform cards 58*-60* moved to
+  S14 and need card 52 plus the S12/S13 platform substrate.
 - S10 is process tooling: it can run at any time, gates nothing in S2-S8, and
   card 62 depends on card 61.
+- S11 feeds the platform from the SDK and should run 69 -> 70 -> 71 after card
+  72 gives the platform stable run identity and tags.
+- S12 runs before the materialized S7 platform cards 47*/48*: ingest and the
+  dashboard need tenancy, keys, and recorded replay fixtures.
+- S13 is the first platform demo gate and unlocks the parked S5 telephony lane.
+- S14 and S15 are post-core platform hardening tracks; ClickHouse stays deferred
+  behind card 59's semantic API until measured load requires it.
 
 ## Sprint field convention
 
