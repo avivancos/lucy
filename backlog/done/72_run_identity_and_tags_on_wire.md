@@ -4,7 +4,7 @@
 **Epic:** Observability
 **Estimated effort:** ~6 h
 **Depends on:** 24, 37
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -43,9 +43,9 @@ addresses.
 
 ## Chips
 
-- [ ] **C1 - Event tags.** Write failing tests for configured tags, `LUCY_TAGS`, precedence, and redaction, then implement base event tags. Files: `src/lucy/observe/events.py`, `src/lucy/observe/__init__.py`, `tests/test_observability.py`. Verify: `docker compose run --rm lucy-api pytest tests/test_observability.py -q -k tags` -> selected tests pass.
-- [ ] **C2 - Session identity.** Add tests for `agent_version`, `thread_id`, and stable `graph_hash`, then implement the additive fields. Files: `src/lucy/specs.py`, `src/lucy/graph.py`, `tests/test_checkpointing.py`. Verify: `docker compose run --rm lucy-api pytest tests/test_checkpointing.py tests/test_observability.py -q` -> selected files pass.
-- [ ] **C3 - Wire docs and gates.** Update telemetry docs, run full gates, and move the card. Files: `docs/telemetry-wire-v1.md`, `src/lucy/observe/events.py`. Verify: `docker compose run --rm lucy-api pytest` -> full suite green.
+- [x] **C1 - Event tags.** Write failing tests for configured tags, `LUCY_TAGS`, precedence, and redaction, then implement base event tags. Files: `src/lucy/observe/events.py`, `src/lucy/observe/__init__.py`, `tests/test_observability.py`. Verify: `docker compose run --rm lucy-api pytest tests/test_observability.py -q -k tags` -> selected tests pass.
+- [x] **C2 - Session identity.** Add tests for `agent_version`, `thread_id`, and stable `graph_hash`, then implement the additive fields. Files: `src/lucy/specs.py`, `src/lucy/graph.py`, `tests/test_checkpointing.py`. Verify: `docker compose run --rm lucy-api pytest tests/test_checkpointing.py tests/test_observability.py -q` -> selected files pass.
+- [x] **C3 - Wire docs and gates.** Update telemetry docs, run full gates, and move the card. Files: `docs/telemetry-wire-v1.md`, `src/lucy/observe/events.py`. Verify: `docker compose run --rm lucy-api pytest` -> full suite green.
 
 ## Do NOT
 
@@ -56,10 +56,10 @@ addresses.
 
 ## Definition of Done
 
-- [ ] `docker compose run --rm lucy-api pytest tests/test_observability.py tests/test_checkpointing.py -q` -> identity tests pass
-- [ ] `docker compose run --rm lucy-api pytest` -> full suite green
-- [ ] Docker ruff, format check, and mypy gates are clean
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] `docker compose run --rm lucy-api pytest tests/test_observability.py tests/test_checkpointing.py -q` -> identity tests pass
+- [x] `docker compose run --rm lucy-api pytest` -> full suite green
+- [x] Docker ruff, format check, and mypy gates are clean
+- [x] Post-task audit done; follow-up cards raised for anything noticed
 
 ## Failure protocol
 
@@ -68,8 +68,18 @@ metadata and keep the wire field empty until the blocker is fixed.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+No follow-up cards raised. The existing telemetry seam supported additive
+identity fields cleanly; no platform-only tenant concepts were added to SDK
+state.
 
 ## Review evidence
 
-<!-- Required before moving to done/ for cards >= 61. -->
+- code-reviewer: PASS - local review of additive wire fields, graph hash, and backwards-compatible tracer API; no P0/P1 findings.
+- test-auditor: PASS - red tests failed first for tags and topology hash; targeted tests and full Docker suite passed.
+- docs-reviewer: PASS - `docs/telemetry-wire-v1.md` updated for tags and session identity fields.
+- simplicity-reviewer: PASS - implementation keeps one tag merge helper and one topology hash method; no new abstraction beyond the card scope.
+- security-reviewer: PASS - tag keys and values pass through client-side PII redaction before export.
+
+Findings disposition:
+
+- No findings.

@@ -38,6 +38,10 @@ def _redact_arguments(arguments: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def _redact_tags(tags: Dict[str, str]) -> Dict[str, str]:
+    return {redact_text(key): redact_text(value) for key, value in tags.items()}
+
+
 def redact_event(
     event: TelemetryEvent,
     *,
@@ -52,10 +56,9 @@ def redact_event(
         return None
     if not redact_pii:
         return event
-    if isinstance(event, TranscriptEvent):
-        return event.model_copy(update={"text": redact_text(event.text)})
-    if isinstance(event, ToolCallEvent):
-        return event.model_copy(
-            update={"arguments": _redact_arguments(event.arguments)}
-        )
-    return event
+    safe = event.model_copy(update={"tags": _redact_tags(event.tags)})
+    if isinstance(safe, TranscriptEvent):
+        return safe.model_copy(update={"text": redact_text(safe.text)})
+    if isinstance(safe, ToolCallEvent):
+        return safe.model_copy(update={"arguments": _redact_arguments(safe.arguments)})
+    return safe

@@ -20,6 +20,7 @@ class TelemetryEventBase(BaseModel):
     event_id: str
     session_id: str
     emitted_at_ms: int = Field(ge=0)
+    tags: Dict[str, str] = Field(default_factory=dict)
 
     def to_wire(self) -> Dict[str, object]:
         return self.model_dump(mode="json")
@@ -31,6 +32,9 @@ class SessionStartedEvent(TelemetryEventBase):
     spec_hash: str
     environment: str
     transport: str
+    agent_version: Optional[str] = None
+    graph_hash: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 class SessionEndedEvent(TelemetryEventBase):

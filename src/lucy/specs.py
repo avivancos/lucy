@@ -47,6 +47,7 @@ class AgentSpec(BaseModel):
     name: str
     goal: str
     prompt: str
+    agent_version: str = "dev"
     tools: List[str] = Field(default_factory=list)
     escalation_policy: str = "handoff_on_low_confidence"
 

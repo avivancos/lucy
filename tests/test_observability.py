@@ -338,6 +338,79 @@ def test_entry_point_discovery_attaches_factory_results(monkeypatch):
     assert len(discovered) == 1
 
 
+# -- card 72: telemetry run identity and tags --------------------------------
+
+
+def test_configure_merges_env_configured_and_event_tags(monkeypatch):
+    monkeypatch.setenv("LUCY_TAGS", "env=dev,region=eu")
+    exporter = InMemoryTraceExporter()
+    tracer = configure(exporters=[exporter], tags={"region": "us", "team": "voice"})
+    tracer._clock = lambda: 1000
+    tracer._id_factory = _counter()
+
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+        tags={"team": "runtime", "call_type": "synthetic"},
+    )
+    tracer.flush()
+
+    assert exporter.events[0].tags == {
+        "env": "dev",
+        "region": "us",
+        "team": "runtime",
+        "call_type": "synthetic",
+    }
+
+
+def test_tags_are_redacted_before_export(monkeypatch):
+    monkeypatch.setenv("LUCY_TAGS", "owner=john.doe@example.com")
+    exporter = InMemoryTraceExporter()
+    tracer = configure(exporters=[exporter], tags={"phone": "+1 415 555 1234"})
+    tracer._clock = lambda: 1000
+    tracer._id_factory = _counter()
+
+    tracer.turn(
+        session_id="s1",
+        turn_id="t1",
+        turn_index=0,
+        latency_waterfall=LatencyWaterfall(),
+        tags={"contact": "jane@example.com"},
+    )
+    tracer.flush()
+
+    tags = exporter.events[0].tags
+    assert tags["owner"] == "[REDACTED]"
+    assert tags["phone"] == "[REDACTED]"
+    assert tags["contact"] == "[REDACTED]"
+
+
+def test_session_started_carries_run_identity_tags():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter, tags={"env": "test"})
+
+    tracer.session_started(
+        session_id="s1",
+        agent_name="booking",
+        spec_hash="spec1",
+        environment="local",
+        transport="sim",
+        agent_version="v2",
+        graph_hash="graph123",
+        thread_id="thread-a",
+        tags={"scenario": "happy"},
+    )
+    tracer.flush()
+
+    event = exporter.events[0]
+    assert event.agent_version == "v2"
+    assert event.graph_hash == "graph123"
+    assert event.thread_id == "thread-a"
+    assert event.tags == {"env": "test", "scenario": "happy"}
+
+
 # -- card 25: runtime instrumentation wired into the tracer ------------------
 
 

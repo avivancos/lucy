@@ -49,6 +49,9 @@ from lucy.observe.redact import redact_event, redact_text
 
 DEFAULT_QUEUE_MAXLEN = 2048
 EXPORTER_ENTRY_POINT_GROUP = "lucy.exporters"
+TAGS_ENV_VAR = "LUCY_TAGS"
+TAG_PAIR_SEPARATOR = ","
+TAG_KEY_VALUE_SEPARATOR = "="
 
 __all__ = [
     "Tracer",
@@ -114,6 +117,7 @@ class Tracer:
         queue_maxlen: int = DEFAULT_QUEUE_MAXLEN,
         clock: Optional[Clock] = None,
         id_factory: Optional[IdFactory] = None,
+        tags: Optional[Dict[str, str]] = None,
     ) -> None:
         self._exporters: List[TraceExporter] = list(exporters)
         self._sample_rate = sample_rate
@@ -125,6 +129,7 @@ class Tracer:
         self._queue: Deque[TelemetryEvent] = deque()
         self._clock = clock or _default_clock
         self._id_factory = id_factory or _default_id_factory
+        self._tags = dict(tags or {})
         self.dropped_events = 0
 
     # -- introspection (used by runtime instrumentation) --------------------
@@ -180,6 +185,11 @@ class Tracer:
     def _id(self, event_id: Optional[str]) -> str:
         return self._id_factory() if event_id is None else event_id
 
+    def _event_tags(self, tags: Optional[Dict[str, str]]) -> Dict[str, str]:
+        merged = dict(self._tags)
+        merged.update(tags or {})
+        return {str(key): str(value) for key, value in merged.items()}
+
     # -- typed emit methods -------------------------------------------------
 
     def session_started(
@@ -190,6 +200,10 @@ class Tracer:
         spec_hash: str,
         environment: str,
         transport: str,
+        agent_version: Optional[str] = None,
+        graph_hash: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -202,6 +216,10 @@ class Tracer:
                 spec_hash=spec_hash,
                 environment=environment,
                 transport=transport,
+                agent_version=agent_version,
+                graph_hash=graph_hash,
+                thread_id=thread_id,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -212,6 +230,7 @@ class Tracer:
         reason: str,
         duration_ms: int,
         billable_audio_minutes: float,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -223,6 +242,7 @@ class Tracer:
                 reason=reason,
                 duration_ms=duration_ms,
                 billable_audio_minutes=billable_audio_minutes,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -235,6 +255,7 @@ class Tracer:
         latency_waterfall: LatencyWaterfall,
         interrupted: bool = False,
         timeout_events: Optional[List[str]] = None,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -248,6 +269,7 @@ class Tracer:
                 latency_waterfall=latency_waterfall,
                 interrupted=interrupted,
                 timeout_events=list(timeout_events or []),
+                tags=self._event_tags(tags),
             )
         )
 
@@ -263,6 +285,7 @@ class Tracer:
         ended_at_ms: int,
         parent_id: Optional[str] = None,
         attributes: Optional[Dict[str, str]] = None,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -279,6 +302,7 @@ class Tracer:
                 ended_at_ms=ended_at_ms,
                 parent_id=parent_id,
                 attributes=dict(attributes or {}),
+                tags=self._event_tags(tags),
             )
         )
 
@@ -288,6 +312,7 @@ class Tracer:
         session_id: str,
         cost: CostBreakdown,
         turn_id: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -298,6 +323,7 @@ class Tracer:
                 emitted_at_ms=self._now(emitted_at_ms),
                 cost=cost,
                 turn_id=turn_id,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -310,6 +336,7 @@ class Tracer:
         sentiment_label: str,
         sentiment_confidence: float,
         turn_id: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -323,6 +350,7 @@ class Tracer:
                 sentiment_label=sentiment_label,
                 sentiment_confidence=sentiment_confidence,
                 turn_id=turn_id,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -337,6 +365,7 @@ class Tracer:
         latency_ms: float,
         arguments: Optional[Dict[str, object]] = None,
         error: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -352,6 +381,7 @@ class Tracer:
                 latency_ms=latency_ms,
                 arguments=dict(arguments or {}),
                 error=error,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -362,6 +392,7 @@ class Tracer:
         turn_id: str,
         role: str,
         text: str,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -373,6 +404,7 @@ class Tracer:
                 turn_id=turn_id,
                 role=role,  # type: ignore[arg-type]
                 text=text,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -383,6 +415,7 @@ class Tracer:
         blob_id: str,
         turn_id: Optional[str] = None,
         upload_url_requested: bool = False,
+        tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
     ) -> None:
@@ -394,6 +427,7 @@ class Tracer:
                 blob_id=blob_id,
                 turn_id=turn_id,
                 upload_url_requested=upload_url_requested,
+                tags=self._event_tags(tags),
             )
         )
 
@@ -433,6 +467,21 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _parse_tags(raw: Optional[str]) -> Dict[str, str]:
+    if raw is None or not raw.strip():
+        return {}
+    tags: Dict[str, str] = {}
+    for item in raw.split(TAG_PAIR_SEPARATOR):
+        if not item.strip() or TAG_KEY_VALUE_SEPARATOR not in item:
+            continue
+        key, value = item.split(TAG_KEY_VALUE_SEPARATOR, 1)
+        key = key.strip()
+        if not key:
+            continue
+        tags[key] = value.strip()
+    return tags
 
 
 def _discover_exporters() -> List[TraceExporter]:
@@ -475,6 +524,7 @@ def configure(
     sample_rate: Optional[float] = None,
     redact_pii: Optional[bool] = None,
     record_audio: Optional[bool] = None,
+    tags: Optional[Dict[str, str]] = None,
 ) -> Tracer:
     """Build a tracer. Explicit arguments win; otherwise environment variables.
 
@@ -496,12 +546,15 @@ def configure(
         sample_rate if sample_rate is not None else _env_float("LUCY_TRACE_SAMPLE", 1.0)
     )
     redaction = True if redact_pii is None else redact_pii
+    configured_tags = _parse_tags(os.environ.get(TAGS_ENV_VAR))
+    configured_tags.update(tags or {})
     return Tracer(
         exporters=chosen,
         sample_rate=rate,
         redact_pii=redaction,
         record_audio=False if record_audio is None else record_audio,
         enabled=enabled,
+        tags=configured_tags,
     )
 
 

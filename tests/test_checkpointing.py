@@ -132,6 +132,32 @@ def _custom_graph(store: InMemoryCheckpointStore | None = None):
     )
 
 
+def test_compiled_graph_topology_hash_is_stable_and_not_object_identity():
+    graph_a = _custom_graph()
+    graph_b = _custom_graph()
+
+    assert graph_a.topology_hash() == graph_b.topology_hash()
+    assert "0x" not in graph_a.topology_hash()
+
+
+def test_compiled_graph_topology_hash_changes_when_topology_changes():
+    graph_a = _custom_graph()
+
+    async def extra_node(state: ConversationState, ctx):
+        return {"agent_state": {**state.agent_state, "extra": True}}
+
+    graph_b = (
+        AgentGraph[ConversationState]()
+        .add_node("context_synthesis", lambda state, ctx: extra_node(state, ctx))
+        .add_node("extra", extra_node)
+        .add_edge("context_synthesis", "extra")
+        .set_entry("context_synthesis")
+        .compile()
+    )
+
+    assert graph_a.topology_hash() != graph_b.topology_hash()
+
+
 async def test_custom_graph_conditional_edge_routes_real_harness_call():
     store = InMemoryCheckpointStore()
     driver = GraphTurnDriver(

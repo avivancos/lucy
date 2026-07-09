@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -155,6 +157,33 @@ class CompiledAgentGraph(Generic[StateT]):
 
     def __post_init__(self) -> None:
         self._node_order = {name: index for index, name in enumerate(self.order)}
+
+    def topology_hash(self) -> str:
+        """Stable digest of graph structure, never handler object identity."""
+        payload = {
+            "nodes": [
+                {
+                    "name": name,
+                    "deadline_ms": self.nodes[name].deadline_ms,
+                    "retries": self.nodes[name].retries,
+                    "has_fallback": self.nodes[name].fallback is not None,
+                }
+                for name in self.order
+            ],
+            "edges": {
+                source: list(targets) for source, targets in sorted(self.edges.items())
+            },
+            "conditional": {
+                source: getattr(route, "__qualname__", getattr(route, "__name__", ""))
+                for source, route in sorted(self.conditional.items())
+            },
+            "entry": self.entry,
+            "limits": self.limits.model_dump(mode="json"),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        return hashlib.sha256(encoded).hexdigest()
 
     async def invoke_turn(self, state: StateT, ctx: TurnContext) -> StateT:
         frontier = [self.entry]

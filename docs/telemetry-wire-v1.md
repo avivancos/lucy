@@ -31,18 +31,23 @@ Telemetry must never add latency to a voice turn or crash a call:
   "project": "string",
   "sdk": {"name": "lucy", "version": "0.1.0"},
   "events": [ { "type": "...", "event_id": "uuid", "session_id": "string",
-                "emitted_at_ms": 0, "...": "type-specific fields" } ]
+                "emitted_at_ms": 0, "tags": {"key": "value"},
+                "...": "type-specific fields" } ]
 }
 ```
 
 Within wire v1, changes are additive only. Unknown fields must be ignored by
 servers; unknown event types must be accepted and stored opaquely.
 
+Every event may carry `tags`, a string-to-string map for user-provided run,
+environment, experiment, and scenario dimensions. Tags pass through the same
+client-side PII redaction path as transcripts and tool arguments.
+
 ## Event types
 
 | type | payload (beyond common fields) |
 | --- | --- |
-| `session.started` | `agent_name`, `spec_hash`, `environment`, `transport` |
+| `session.started` | `agent_name`, `spec_hash`, `environment`, `transport`, optional `agent_version`, `graph_hash`, `thread_id` |
 | `session.ended` | `reason`, `duration_ms`, `billable_audio_minutes` |
 | `turn` | `turn_id`, `turn_index`, `latency_waterfall` (stt_ms, rag_ms, llm_ms, mcp_tools_ms, tts_ms, transport_ms), `interrupted`, `timeout_events` |
 | `span` | `span_id`, `parent_id`, `turn_id`, `name`, `status` (ok/fallback/error/cancelled), `started_at_ms`, `ended_at_ms`, `attributes` |
