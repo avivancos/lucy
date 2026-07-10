@@ -139,9 +139,11 @@ class LocalLlmSimulator:
         self._index = 0
         self.cancelled = False
         self.seen_cache_keys: List[Optional[str]] = []
+        self.seen_requests: List[LlmRequest] = []
 
     async def stream_chat(self, request: LlmRequest) -> AsyncIterator[LlmStreamEvent]:
         self.seen_cache_keys.append(request.cache_key)
+        self.seen_requests.append(request.model_copy(deep=True))
         turn = self._turns[self._index]
         self._index += 1
         try:

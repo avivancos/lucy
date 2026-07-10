@@ -347,6 +347,8 @@ def default_agent_graph(
             llm_cost=0.0,
         )
         history = _history_from_state(state)
+        if ctx.current_user_in_state and history and history[-1].role == "user":
+            history.pop()
         rag_result = ctx.payload.get(RAG_RESULT_PAYLOAD_KEY)
         if isinstance(rag_result, RagResult):
             context_message = grounded_context_message(rag_result)

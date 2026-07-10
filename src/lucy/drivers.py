@@ -250,6 +250,10 @@ class GraphTurnDriver:
         self.session_id = session_id
         self.clock = clock
         self.state = state or ConversationState()
+        self._history_base_transcript = [
+            line.model_copy(deep=True) for line in self.state.transcript
+        ]
+        self._history_base_turns = self.state.turns
 
     @property
     def checkpointer(self) -> Optional[CheckpointStore]:
@@ -262,6 +266,7 @@ class GraphTurnDriver:
         *,
         turn_context: object | None = None,
     ) -> AsyncIterator[DriverEvent]:
+        self.reconcile_history(history)
         turn_id = "turn-%d" % (self.state.turns + 1)
         working_state = self.state.merged(
             {
@@ -277,12 +282,25 @@ class GraphTurnDriver:
             if isinstance(event, TtsSpeak):
                 queue.put_nowait(event)
 
+        outer_context = turn_context if isinstance(turn_context, TurnContext) else None
         ctx = TurnContext(
             payload={"user_text": user_text},
             session_id=self.session_id,
             turn_id=turn_id,
             clock=self.clock,
             emit=emit,
+            cancellation=(
+                outer_context.cancellation
+                if outer_context is not None
+                else asyncio.Event()
+            ),
+            speculative=(
+                outer_context.speculative if outer_context is not None else False
+            ),
+            promoted=(
+                outer_context.promoted if outer_context is not None else asyncio.Event()
+            ),
+            current_user_in_state=True,
         )
         task = asyncio.create_task(self.graph.invoke_turn(working_state, ctx))
         final_state: Optional[ConversationState] = None
@@ -314,9 +332,38 @@ class GraphTurnDriver:
 
         if final_state is None:
             final_state = task.result()
+        if outer_context is not None and outer_context.speculative:
+            await outer_context.promoted.wait()
         self.state = final_state
         await self._save_turn_final(turn_id, final_state)
         yield self._report_from_state(final_state)
+
+    def reconcile_history(self, history: Sequence[LlmMessage]) -> None:
+        """Adopt the live session transcript, whose assistant text is playback-safe."""
+        session_transcript: List[TranscriptLine] = []
+        for message in history:
+            if message.role == "user":
+                session_transcript.append(
+                    TranscriptLine(speaker="caller", text=message.content)
+                )
+            elif message.role == "assistant":
+                session_transcript.append(
+                    TranscriptLine(speaker="agent", text=message.content)
+                )
+        if not session_transcript:
+            return
+
+        transcript = [
+            *(line.model_copy(deep=True) for line in self._history_base_transcript),
+            *session_transcript,
+        ]
+        session_turns = sum(line.speaker == "caller" for line in session_transcript)
+        self.state = self.state.merged(
+            {
+                "transcript": transcript,
+                "turns": self._history_base_turns + session_turns,
+            }
+        )
 
     async def _save_turn_final(self, turn_id: str, state: ConversationState) -> None:
         checkpointer = self.graph.checkpointer

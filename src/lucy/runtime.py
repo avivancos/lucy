@@ -41,6 +41,7 @@ class TurnContext(GraphContext):
     speculative: bool = False
     promoted: asyncio.Event = field(default_factory=asyncio.Event)
     buffered_directives: List[Any] = field(default_factory=list)
+    current_user_in_state: bool = False
 
 
 @dataclass

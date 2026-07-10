@@ -524,6 +524,9 @@ class VoiceSession:
         self._history.append(
             LlmMessage(role="assistant", content=record.assistant_text)
         )
+        reconcile_history = getattr(self.driver, "reconcile_history", None)
+        if callable(reconcile_history):
+            reconcile_history(tuple(self._history))
 
     async def _await_task(self, turn: _ActiveTurn) -> None:
         if turn.task is not None:

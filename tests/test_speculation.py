@@ -3,7 +3,8 @@ import asyncio
 import pytest
 
 from lucy.clock import ManualClock
-from lucy.drivers import CascadedTurnDriver
+from lucy.drivers import CascadedTurnDriver, GraphTurnDriver
+from lucy.graph import default_agent_graph
 from lucy.llm import (
     LlmMessage,
     LlmRequest,
@@ -368,6 +369,41 @@ async def test_revision_aborts_run_and_nothing_speculative_is_spoken():
         if isinstance(event.payload, TtsSpeak)
     ]
     assert spoken == ["Right."]
+
+
+async def test_revision_aborts_speculative_graph_state_before_final_prompt():
+    clock = ManualClock()
+    gateway = PartialFinalGateway(clock, partial="book", final="cancel")
+    sim = LocalLlmSimulator(
+        [
+            ScriptedLlmTurn(tokens=["Wrong."], usage=UsageReport(1, 1)),
+            ScriptedLlmTurn(tokens=["Right."], usage=UsageReport(1, 1)),
+        ],
+        clock,
+        token_interval_ms=0,
+    )
+    graph_driver = GraphTurnDriver(
+        default_agent_graph(_driver(clock, sim)).compile(),
+        session_id="s",
+        clock=clock,
+    )
+    session = VoiceSession(
+        "s",
+        gateway,
+        None,
+        driver=graph_driver,
+        clock=clock,
+        speculation=SpeculationSettings(enabled_llm_start=True),
+    )
+
+    await session.run()
+
+    assert [message.content for message in sim.seen_requests[1].messages] == ["cancel"]
+    assert [line.text for line in graph_driver.state.transcript] == [
+        "cancel",
+        "Right.",
+    ]
+    assert graph_driver.state.turns == 1
 
 
 async def test_speculative_tool_call_waits_for_promotion():
