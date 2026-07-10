@@ -15,12 +15,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Awaitable, Callable, List, Optional, Sequence
+from typing import Awaitable, Callable, List, Optional, Sequence
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.drivers import TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage, compute_cache_key
 from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.rag import RagResult, SpeculativeRagNode, grounded_context_message
 from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, SpeculationSettings
 from lucy.speech import TtsPlanner
@@ -37,9 +38,6 @@ from lucy.transport.schema import (
     TtsStreamEnd,
     VadSpeechStart,
 )
-
-if TYPE_CHECKING:
-    from lucy.rag import SpeculativeRagNode
 
 Responder = Callable[[str], Awaitable[str]]
 
@@ -179,6 +177,7 @@ class _ActiveTurn:
     mcp_tools_ms: float = 0.0
     rag_ms: float = 0.0
     rag_cache_hit: bool = False
+    rag_result: Optional[RagResult] = None
     clock_start: float = 0.0
     barrier_sent: bool = False  # tts.stream_end sent exactly once per turn
     planner: Optional[TtsPlanner] = None  # set in driver mode
@@ -203,7 +202,7 @@ class VoiceSession:
         clock: Optional[Clock] = None,
         budgets: Optional[LatencyBudgets] = None,
         speculation: Optional[SpeculationSettings] = None,
-        rag: "SpeculativeRagNode | None" = None,
+        rag: Optional[SpeculativeRagNode] = None,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -427,8 +426,13 @@ class VoiceSession:
         first_tts = True
         try:
             await self._retrieve_rag(turn)
+            history = list(self._history)
+            if turn.rag_result is not None:
+                context_message = grounded_context_message(turn.rag_result)
+                if context_message is not None:
+                    history.insert(0, context_message)
             async for event in self.driver.run_turn(
-                turn.user_text, list(self._history), turn_context=context
+                turn.user_text, history, turn_context=context
             ):
                 if isinstance(event, TtsSpeak):
                     turn.utterance_texts.append((event.utterance_id, event.text))
@@ -475,6 +479,7 @@ class VoiceSession:
         result = await self.rag.prefetch(turn.user_text)
         turn.rag_ms = (self.clock.monotonic() - started) * 1000.0
         turn.rag_cache_hit = result.cache_hit
+        turn.rag_result = result
 
     async def _interrupt(
         self,

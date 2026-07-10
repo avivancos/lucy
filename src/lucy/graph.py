@@ -20,7 +20,7 @@ from typing import (
 
 from lucy.drivers import TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage
-from lucy.rag import SpeculativeRagNode
+from lucy.rag import RagResult, SpeculativeRagNode, grounded_context_message
 from lucy.runtime import (
     GraphContext,
     GraphExecutionError,
@@ -40,6 +40,7 @@ from lucy.state import (
 from lucy.transport.schema import TtsSpeak
 
 END = "__end__"
+RAG_RESULT_PAYLOAD_KEY = "_lucy_rag_result"
 StateT = TypeVar("StateT", bound=ConversationState)
 AgentNodeHandler = Callable[[StateT, TurnContext], Awaitable[Dict[str, Any]]]
 RouteFn = Callable[[StateT], str]
@@ -321,6 +322,7 @@ def default_agent_graph(
         if rag is None:
             return _empty_context_update(state)
         result = await rag.prefetch(user_text)
+        ctx.payload[RAG_RESULT_PAYLOAD_KEY] = result
         agent_state = {
             **state.agent_state,
             "prompt_context": result.prompt_context,
@@ -332,6 +334,7 @@ def default_agent_graph(
     async def context_fallback(
         state: ConversationState, ctx: TurnContext
     ) -> Dict[str, Any]:
+        ctx.payload.pop(RAG_RESULT_PAYLOAD_KEY, None)
         return _empty_context_update(state)
 
     async def llm(state: ConversationState, ctx: TurnContext) -> Dict[str, Any]:
@@ -343,9 +346,15 @@ def default_agent_graph(
             usage=None,
             llm_cost=0.0,
         )
+        history = _history_from_state(state)
+        rag_result = ctx.payload.get(RAG_RESULT_PAYLOAD_KEY)
+        if isinstance(rag_result, RagResult):
+            context_message = grounded_context_message(rag_result)
+            if context_message is not None:
+                history.insert(0, context_message)
         async for event in inner.run_turn(
             user_text,
-            _history_from_state(state),
+            history,
             turn_context=ctx,
         ):
             if isinstance(event, TtsSpeak):

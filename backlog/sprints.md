@@ -11,7 +11,7 @@ order unless the dependency notes say a sprint can start early.
 | S1 Open-core restructure | Packaging | 20, 21, 22, 23, 24, 25, 26, 27 | Quickstart runs with zero keys; pili and lucy-platform extracted; three clean git repos; full suite green |
 | S2 Voice runtime core | Runtime | 32, 33, 34, 64 | Scripted call end-to-end: streaming LLM, mid-call MCP tool with filler, real per-turn LatencyWaterfall |
 | S3 Conversational correctness | Runtime | 35, 36, 31 | booking_interruption eval green; <800 ms p50 budget asserted with ManualClock; traces visible in `lucy dev` viewer |
-| S4 Graph and state | Runtime | 37, 39 | Prebuilt `booking_agent()` passes all six golden scenarios; kill/resume mid-call works |
+| S4 Graph and state | Runtime | 37, 39, 95 | Prebuilt `booking_agent()` passes all six golden scenarios; grounded RAG context reaches the LLM; kill/resume mid-call works |
 | S5 Native telephony | Telephony | 40, 41, 42, 43, 44, 45 | Real call softphone -> Asterisk -> Lucy locally; real PSTN call via CPaaS with a Spanish DID |
 | S6 Provider ecosystem | Providers | 28, 29, 38, 51, 68 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers; routed LLM fallback spans are observable |
 | S7 Cloud observability seam | Platform | 30, 47*, 48*, 72, 73 | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard; run identity, tags, and blob presign are wired |
@@ -32,6 +32,9 @@ on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
 
 - S2 -> S3 -> S4 are strictly sequential (each builds on the previous
   runtime layer).
+- Card 95 closes the grounded-context correctness gap in the landed card 37
+  default graph and live cascaded session before the prebuilt catalog in card
+  39 builds on that path.
 - S5 is intentionally parked until the S13 platform demo, then runs 40 -> 41
   -> 42, with 43/44/45 scoped from the S5 findings. The transports still adapt
   the control-channel schema defined in S2.
