@@ -8,7 +8,7 @@ exposes a turn-shaped API. A "turn" is one exchange - the caller speaks
 (``synthesize``) - emitted as a single ``turn`` telemetry event with the full
 latency waterfall and any provider timeouts from either half.
 
-Real provider plugins resolve through the same string seam in card 28.
+Local and external providers resolve through the same lazy plugin registry.
 """
 
 from __future__ import annotations
@@ -21,19 +21,15 @@ from typing import List, Optional, Sequence, Tuple, cast
 
 from lucy.metrics import CostBreakdown, LatencyWaterfall
 from lucy.observe import Tracer, configure
+from lucy.plugins import PluginRegistry, load_plugins
 from lucy.runtime import GraphContext, GraphExecutor, GraphNode
 from lucy.specs import LucySpec
 from lucy.voice import (
     AudioChunk,
     ProviderTimeoutEvent,
-    SttProvider,
     TranscriptEvent,
-    TtsProvider,
     VoiceEvent,
 )
-
-# Bare provider names resolvable today; real providers arrive as plugins (card 28).
-KNOWN_PROVIDERS: Tuple[str, ...] = ("local",)
 
 # Graph node whose result is the agent's spoken response, and whose latency is
 # the LLM slice of the waterfall.
@@ -41,30 +37,6 @@ RESPONSE_NODE = "llm"
 DEFAULT_STT_DEADLINE_MS = 500
 DEFAULT_TTS_DEADLINE_MS = 500
 LOCAL_SIMULATOR_BILLABLE_AUDIO_MINUTES = 1.0 / 60.0
-
-
-def _unknown_provider_message(kind: str, name: str) -> str:
-    return (
-        "unknown %s provider %r; known providers: %s "
-        "(real provider plugins arrive with card 28)"
-        % (kind, name, ", ".join(KNOWN_PROVIDERS))
-    )
-
-
-def _resolve_stt(name: str) -> SttProvider:
-    if name == "local":
-        from lucy.testing import LocalSttSimulator
-
-        return LocalSttSimulator()
-    raise ValueError(_unknown_provider_message("stt", name))
-
-
-def _resolve_tts(name: str) -> TtsProvider:
-    if name == "local":
-        from lucy.testing import LocalTtsSimulator
-
-        return LocalTtsSimulator()
-    raise ValueError(_unknown_provider_message("tts", name))
 
 
 def _default_graph(tracer: Tracer) -> GraphExecutor:
@@ -122,6 +94,7 @@ class VoiceAgent:
     def __init__(
         self,
         spec: LucySpec,
+        plugins: Optional[PluginRegistry] = None,
         *,
         tracer: Optional[Tracer] = None,
         graph: Optional[GraphExecutor] = None,
@@ -133,8 +106,9 @@ class VoiceAgent:
             redact_pii=obs.redact_pii,
             record_audio=obs.record_audio,
         )
-        self.stt_provider = _resolve_stt(spec.voice.stt_provider)
-        self.tts_provider = _resolve_tts(spec.voice.tts_provider)
+        self.plugins = plugins if plugins is not None else load_plugins()
+        self.stt_provider = self.plugins.resolve_stt(spec.voice.stt_provider)
+        self.tts_provider = self.plugins.resolve_tts(spec.voice.tts_provider)
         self.stt_deadline_ms = DEFAULT_STT_DEADLINE_MS
         self.tts_deadline_ms = DEFAULT_TTS_DEADLINE_MS
         self.graph = graph if graph is not None else _default_graph(self.tracer)

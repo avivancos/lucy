@@ -4,7 +4,7 @@
 **Epic:** SDK surface
 **Estimated effort:** ~8 h
 **Depends on:** 26
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -187,27 +187,27 @@ Read, in this order, before writing anything:
 
 ## Chips
 
-- [ ] **C1 - Freeze the ABI as runtime-checkable Protocols.** Write
+- [x] **C1 - Freeze the ABI as runtime-checkable Protocols.** Write
   `tests/test_plugins.py` first:
   `test_simulators_satisfy_runtime_checkable_provider_protocols` -
   `isinstance(LocalSttSimulator(), SttProvider)` is true, same for TTS,
   and a plain `object()` fails both checks. Then add `@runtime_checkable`
   and the ABI docstrings in `src/lucy/voice.py`. Verify:
   `.venv/bin/python -m pytest tests/test_plugins.py -q` -> all pass.
-- [ ] **C2 - Spec-string parser.** Tests first in `tests/test_plugins.py`:
+- [x] **C2 - Spec-string parser.** Tests first in `tests/test_plugins.py`:
   `test_parse_spec_string_accepts_local_and_plugin_model` and
   `test_parse_spec_string_rejects_malformed_values` (every malformed case
   listed in the Spec, asserting the message names the bad value).
   Implement `parse_spec_string`, `LOCAL_PROVIDER_NAME`, and
   `InvalidProviderSpecError` in `src/lucy/providers.py`. Verify:
   `.venv/bin/python -m pytest tests/test_plugins.py -q` -> all pass.
-- [ ] **C3 - LucyPlugin dataclass and error hierarchy.** Test first:
+- [x] **C3 - LucyPlugin dataclass and error hierarchy.** Test first:
   `test_lucy_plugin_is_frozen_with_optional_factories` (frozen dataclass,
   all five factories default `None`, field order as specced). Implement
   `src/lucy/plugins.py` with `LucyPlugin`, `PLUGIN_ENTRY_POINT_GROUP`,
   and the four error classes; no registry yet. Verify:
   `.venv/bin/python -m pytest tests/test_plugins.py -q` -> all pass.
-- [ ] **C4 - Workspace and fixture plugin package.** Test first:
+- [x] **C4 - Workspace and fixture plugin package.** Test first:
   `test_fixture_plugin_entry_points_discoverable` - the `lucy.plugins`
   entry-point group contains `fixture` and `fixture-broken`. Create
   `packages/lucy-fixture-plugin/` (pyproject, `__init__.py`, `broken.py`
@@ -215,7 +215,7 @@ Read, in this order, before writing anything:
   update `Dockerfile.api`. Verify: `.venv/bin/python -m pip install -e
   packages/lucy-fixture-plugin && .venv/bin/python -m pytest
   tests/test_plugins.py -q` -> install succeeds, all pass.
-- [ ] **C5 - Lazy PluginRegistry.** Tests first:
+- [x] **C5 - Lazy PluginRegistry.** Tests first:
   `test_discovery_does_not_import_plugin_module` (pop
   `lucy_fixture_plugin` from `sys.modules`, `load_plugins()`, assert
   `"fixture" in registry.names()` while the module is still absent from
@@ -226,7 +226,7 @@ Read, in this order, before writing anything:
   `PluginRegistry`, `load_plugins`, and the 3.9/3.10+ entry-points
   accessor in `src/lucy/plugins.py`. Verify:
   `.venv/bin/python -m pytest tests/test_plugins.py -q` -> all pass.
-- [ ] **C6 - One-code-path resolution with ABI enforcement.** Tests first:
+- [x] **C6 - One-code-path resolution with ABI enforcement.** Tests first:
   `test_local_and_plugin_specs_resolve_through_one_code_path`
   (`resolve_stt("local")` is a `LocalSttSimulator`;
   `resolve_stt("fixture/echo-1")` satisfies `SttProvider`; same pair for
@@ -237,7 +237,7 @@ Read, in this order, before writing anything:
   `resolve_stt`/`resolve_tts`/`_resolve` in `src/lucy/plugins.py`.
   Verify: `.venv/bin/python -m pytest tests/test_plugins.py -q` -> all
   pass.
-- [ ] **C7 - Catalog merge and revalidation.** Tests first:
+- [x] **C7 - Catalog merge and revalidation.** Tests first:
   `test_default_registry_merges_plugin_catalogs` (merged registry returns
   `get("fixture", "echo-1")`), `test_catalog_conflict_raises_named_error`
   (an in-test `LucyPlugin` whose catalog duplicates `openai/whisper-1`),
@@ -247,7 +247,7 @@ Read, in this order, before writing anything:
   `ModelCatalogConflictError` in `src/lucy/providers.py`. Verify:
   `.venv/bin/python -m pytest tests/test_plugins.py
   tests/test_registry_mcp_metrics.py -q` -> all pass, no regression.
-- [ ] **C8 - Wire the VoiceAgent facade.** Tests first:
+- [x] **C8 - Wire the VoiceAgent facade.** Tests first:
   `test_voice_agent_runs_turn_with_plugin_spec_strings` (a `LucySpec`
   with `stt_provider="fixture/echo-1"`, `tts_provider="local"` runs a
   turn offline) and `test_voice_agent_unknown_plugin_error_names_available`
@@ -256,7 +256,7 @@ Read, in this order, before writing anything:
   deleting any card-26 local-only resolution branch. Verify:
   `.venv/bin/python -m pytest tests/test_plugins.py
   tests/test_agent_facade.py -q` -> all pass.
-- [ ] **C9 - Full suite + bookkeeping.** Run everything, fill
+- [x] **C9 - Full suite + bookkeeping.** Run everything, fill
   "Improvements noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green (use Docker Compose
   `docker compose run --rm lucy-api pytest` when the daemon is
@@ -287,24 +287,24 @@ Read, in this order, before writing anything:
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_plugins.py
+- [x] `.venv/bin/python -m pytest tests/test_plugins.py
       tests/test_agent_facade.py -q` -> all pass (>= 13 tests in
       `test_plugins.py`)
-- [ ] `.venv/bin/python -c "from lucy.plugins import load_plugins;
+- [x] `.venv/bin/python -c "from lucy.plugins import load_plugins;
       r = load_plugins(); print(type(r.resolve_stt('local')).__name__,
       type(r.resolve_stt('fixture/echo-1')).__name__)"` -> prints
       `LocalSttSimulator LocalSttSimulator` (one code path, both forms)
-- [ ] `.venv/bin/python -c "from lucy.plugins import load_plugins;
+- [x] `.venv/bin/python -c "from lucy.plugins import load_plugins;
       from lucy.providers import default_model_registry;
       print(default_model_registry(
       plugins=load_plugins().load_all()).get('fixture', 'echo-1')
       is not None)"` -> prints `True` (merged catalog)
-- [ ] `grep -n "tool.uv.workspace" pyproject.toml` -> one match
+- [x] `grep -n "tool.uv.workspace" pyproject.toml` -> one match
       (workspace declared)
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon
       is available)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
 
 ## Failure protocol
 
@@ -315,7 +315,32 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- Provider spec components containing only whitespace are rejected rather than
+  treated as plugin/model identifiers; negative regressions cover both sides.
+- Entry-point discovery uses the modern grouped API first and a typed legacy
+  dict fallback for Python 3.9 without importing plugin modules.
+- Docker lint and formatting were also run over `packages/`, beyond the core
+  `src tests` gate, so separately released plugin code follows the same rules.
+
+## Review evidence
+
+- code-reviewer: PASS - lazy loading, one resolver path, cycle direction, and
+  catalog conflict handling reviewed with no unresolved P0/P1 findings.
+- test-auditor: PASS - clean Docker build and 392 tests pass; 24 plugin tests
+  use installed entry points and real simulators without mocks/monkeypatching.
+- docs-reviewer: PASS - frozen Protocol docstrings name ADR 0010 and SemVer;
+  workspace and entry-point metadata are explicit.
+- simplicity-reviewer: PASS - `VoiceAgent` deletes its local-only branches and
+  delegates both local and external specs to one registry.
+- security-reviewer: PASS - only explicitly installed distributions execute;
+  discovery is lazy, no secrets or provider payloads are logged.
+
+Findings disposition:
+
+- [P2][code-reviewer-001] whitespace-only plugin/model components parsed as
+  valid - fixed with parser validation and negative tests.
+- [P2][test-auditor-001] workspace package was outside static gates - fixed by
+  running ruff check/format over `packages/` and recording it in closure.
 
 ## Pending human testing
 

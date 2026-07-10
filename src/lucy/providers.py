@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from lucy.plugins import LucyPlugin
 
 
 class Capability(str, Enum):
@@ -16,6 +19,28 @@ class Capability(str, Enum):
     TTS = "tts"
     EMBEDDING = "embedding"
     RERANKER = "reranker"
+
+
+LOCAL_PROVIDER_NAME = "local"
+
+
+class InvalidProviderSpecError(ValueError):
+    """Raised when a provider spec is neither local nor plugin/model."""
+
+
+class ModelCatalogConflictError(ValueError):
+    """Raised when merged catalogs repeat a provider/model key."""
+
+
+def parse_spec_string(value: str) -> Tuple[str, Optional[str]]:
+    if value == LOCAL_PROVIDER_NAME:
+        return (LOCAL_PROVIDER_NAME, None)
+    parts = value.split("/")
+    if len(parts) == 2 and all(part and part == part.strip() for part in parts):
+        return (parts[0], parts[1])
+    raise InvalidProviderSpecError(
+        "invalid provider spec %r; expected 'local' or '<plugin>/<model>'" % value
+    )
 
 
 class ModelInfo(BaseModel):
@@ -140,8 +165,10 @@ def registry_revalidation_due(
     return (current_date - registry_date).days > max_age_days
 
 
-def default_model_registry() -> ModelRegistry:
-    return ModelRegistry(
+def default_model_registry(
+    plugins: Sequence["LucyPlugin"] = (),
+) -> ModelRegistry:
+    core = ModelRegistry(
         version="2026-06-06",
         models=[
             ModelInfo(
@@ -287,6 +314,23 @@ def default_model_registry() -> ModelRegistry:
             ),
         ],
     )
+    merged = list(core.models)
+    seen = {_model_key(model) for model in merged}
+    conflicts = set()
+    for plugin in plugins:
+        for model in plugin.catalog:
+            key = _model_key(model)
+            if key in seen:
+                conflicts.add(key)
+            else:
+                seen.add(key)
+                merged.append(model)
+    if conflicts:
+        raise ModelCatalogConflictError(
+            "duplicate model catalog entries: %s"
+            % ", ".join(_format_key(key) for key in sorted(conflicts))
+        )
+    return ModelRegistry(version=core.version, models=merged)
 
 
 def registry_summary(registry: Optional[ModelRegistry] = None):

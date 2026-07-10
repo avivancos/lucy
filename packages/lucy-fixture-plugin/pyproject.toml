@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lucy-fixture-plugin"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["lucy"]
+
+[project.entry-points."lucy.plugins"]
+fixture = "lucy_fixture_plugin:plugin"
+fixture-broken = "lucy_fixture_plugin.broken:plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]

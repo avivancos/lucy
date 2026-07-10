@@ -39,6 +39,9 @@ headroom = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.uv.workspace]
+members = ["packages/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

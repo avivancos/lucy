@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Protocol, Union
+from typing import List, Protocol, Union, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -63,11 +63,17 @@ class ProviderPayloadError(ValueError):
     """Raised when a local provider simulator receives malformed payload data."""
 
 
+@runtime_checkable
 class SttProvider(Protocol):
+    """Frozen plugin ABI per ADR 0010; signature changes break SemVer."""
+
     async def transcribe(self, chunks: List[AudioChunk]) -> List[TranscriptEvent]: ...
 
 
+@runtime_checkable
 class TtsProvider(Protocol):
+    """Frozen plugin ABI per ADR 0010; signature changes break SemVer."""
+
     async def synthesize(self, session_id: str, text: str) -> List[TtsStreamEvent]: ...
 
 
