@@ -23,7 +23,7 @@ def test_docker_compose_defines_lucy_local_stack():
     # The dashboard moved to lucy-platform (card 21); lucy no longer ships it.
     assert "lucy-dashboard" not in services
 
-    assert services["lucy-api"]["ports"] == ["8000:8000"]
+    assert services["lucy-api"]["ports"] == ["${LUCY_API_HOST_PORT:-8000}:8000"]
     assert services["lucy-media-gateway"]["ports"] == ["8081:8081"]
     assert services["otel-collector"]["volumes"] == [
         "./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"
@@ -49,6 +49,16 @@ def test_rust_media_gateway_exposes_health_contract():
     assert "lucy-media-gateway" in source
     assert '"/health"' in source
     assert "8081" in source
+
+
+def test_docker_compose_gateway_profiles():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert "profiles" not in services["lucy-media-gateway"]
+    assert services["lucy-dev-gateway"]["profiles"] == ["test"]
+    assert services["lucy-gateway-session"]["profiles"] == ["gateway-it"]
+    assert services["lucy-gateway-tests"]["profiles"] == ["gateway-it"]
 
 
 def test_dockerignore_keeps_build_context_lean_without_hiding_project_sources():

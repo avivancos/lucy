@@ -25,6 +25,7 @@ dev = [
   "pytest-asyncio>=0.23.0",
   "redis>=5.0.0",
   "ruff>=0.6.0",
+  "websockets>=12.0",
 ]
 checkpoint-postgres = [
   "asyncpg>=0.29.0",
@@ -45,9 +46,10 @@ members = ["packages/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--import-mode=importlib -m 'not live'"
+addopts = "--import-mode=importlib -m 'not live and not gateway_it'"
 markers = [
   "live: hits real provider endpoints; requires API keys",
+  "gateway_it: needs Docker and runs gateways against lucy-api via Compose",
 ]
 
 [tool.ruff]

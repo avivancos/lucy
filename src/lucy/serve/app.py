@@ -24,6 +24,7 @@ from lucy.metrics import (
 )
 from lucy.providers import default_model_registry, registry_summary
 from lucy.serve.schemas import HealthResponse
+from lucy.serve.control_ws import register_control_ws
 from lucy.specs import FunnelStage, SentimentLabel
 from lucy.testing import LocalMetricEventChannel
 
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
         version=__version__,
         description="Control plane for Lucy voice-agent infrastructure.",
     )
+    register_control_ws(app)
 
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     async def health() -> HealthResponse:

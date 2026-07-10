@@ -1,0 +1,1 @@
+{"caller":"fixture-caller","codecs":["pcm16/8000"],"features":["recording"],"seq":17,"session_id":"sess-golden","transport":"fixture","ts_ms":1700000000000,"turn_id":"turn-1","type":"session.started","v":1}

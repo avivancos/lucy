@@ -1,7 +1,8 @@
-FROM rust:1.82-slim AS builder
+FROM rust:1.82-bookworm AS builder
 
 WORKDIR /app
 COPY Cargo.toml ./
+COPY Cargo.lock ./
 COPY src ./src
 RUN cargo build --release
 
@@ -13,4 +14,3 @@ COPY --from=builder /app/target/release/lucy-media-gateway /usr/local/bin/lucy-m
 EXPOSE 8081
 
 CMD ["lucy-media-gateway"]
-

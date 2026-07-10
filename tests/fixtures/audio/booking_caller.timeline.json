@@ -1,0 +1,27 @@
+{
+  "wav": "booking_caller_8k.wav",
+  "utterances": [
+    {
+      "text": "I want to book a demo.",
+      "start_ms": 0,
+      "end_ms": 1800,
+      "words": [
+        {"text": "I", "at_ms": 100},
+        {"text": "want", "at_ms": 350},
+        {"text": "to", "at_ms": 600},
+        {"text": "book", "at_ms": 850},
+        {"text": "a", "at_ms": 1100},
+        {"text": "demo.", "at_ms": 1400}
+      ]
+    },
+    {
+      "text": "Tuesday morning.",
+      "start_ms": 1900,
+      "end_ms": 2700,
+      "words": [
+        {"text": "Tuesday", "at_ms": 2050},
+        {"text": "morning.", "at_ms": 2400}
+      ]
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 **Epic:** Media gateway
 **Estimated effort:** ~14 h
 **Depends on:** 32, 70
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -297,7 +297,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
 
 ## Chips
 
-- [ ] **C1 - Golden generator on the Python side.** Write
+- [x] **C1 - Golden generator on the Python side.** Write
   `tests/test_control_schema_golden.py` first:
   `test_every_schema_payload_model_has_a_golden_message`,
   `test_golden_messages_round_trip_through_parse_event`,
@@ -309,7 +309,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   Verify: `.venv/bin/python -m pytest
   tests/test_control_schema_golden.py -q` -> >=3 pass, 27 golden files
   committed.
-- [ ] **C2 - Simulator byte-compatibility.** Test first, same file:
+- [x] **C2 - Simulator byte-compatibility.** Test first, same file:
   `test_dev_gateway_emissions_canonicalize_and_reparse_byte_identical` -
   run `LocalGatewaySimulator` over `booking_happy_path()`, canonicalize
   every emitted message with `canonical_dumps`, reparse via `parse_event`,
@@ -317,7 +317,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   matches its golden file. Fix `golden.py` (never `schema.py`) if a
   mismatch appears. Verify: `.venv/bin/python -m pytest
   tests/test_control_schema_golden.py -q` -> all pass.
-- [ ] **C3 - Recorded WAV fixture + timeline.** Write
+- [x] **C3 - Recorded WAV fixture + timeline.** Write
   `tests/test_audio_fixture.py` first:
   `test_wav_fixture_is_8k_mono_pcm16` (stdlib `wave`),
   `test_timeline_matches_scenario_caller_lines_and_wav_duration`. Record
@@ -325,7 +325,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   `tests/fixtures/audio/booking_caller.timeline.json`, commit both.
   Verify: `.venv/bin/python -m pytest tests/test_audio_fixture.py -q`
   -> all pass.
-- [ ] **C4 - Rust schema structs + conformance harness.** Write
+- [x] **C4 - Rust schema structs + conformance harness.** Write
   `media-gateway-rust/tests/schema_conformance.rs` first:
   `golden_files_reserialize_byte_identical`,
   `every_golden_type_maps_to_a_variant_and_counts_match`,
@@ -334,7 +334,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   and `media-gateway-rust/src/control/{mod.rs,schema.rs}`, and add the
   `lucy-gateway-tests` compose service. Verify: `docker compose --profile
   gateway-it run --rm lucy-gateway-tests` -> conformance tests pass.
-- [ ] **C5 - Rust fixture streamer.** Tests first in
+- [x] **C5 - Rust fixture streamer.** Tests first in
   `media-gateway-rust/src/control/fixture.rs` (`#[cfg(test)]`, tokio
   `start_paused`): `timeline_emits_rising_stability_partials_then_final`,
   `loader_rejects_non_8k_mono_wav`,
@@ -342,7 +342,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   `AudioFixture` load + stream. Verify: `docker compose --profile
   gateway-it run --rm lucy-gateway-tests` -> all pass, no test sleeps
   wall-clock (paused clock).
-- [ ] **C6 - Rust session client handshake + streaming.** Test first in
+- [x] **C6 - Rust session client handshake + streaming.** Test first in
   `media-gateway-rust/src/control/session.rs` against an in-test
   tokio-tungstenite server:
   `session_client_sends_session_started_first_then_streams_fixture`
@@ -350,7 +350,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   `tts.speak` per `stt.final`). Implement `GatewayConfig::from_env`,
   connect-with-retry, handshake, turn-gated streaming. Verify: `docker
   compose --profile gateway-it run --rm lucy-gateway-tests` -> all pass.
-- [ ] **C7 - Playback pacing, metrics, oneshot report.** Tests first in
+- [x] **C7 - Playback pacing, metrics, oneshot report.** Tests first in
   `session.rs`:
   `tts_speak_yields_started_marks_finished_with_advancing_mark_chars`,
   `tts_cancel_mid_playback_emits_flushed_with_partial_mark_chars`,
@@ -361,7 +361,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   Verify: `docker compose --profile gateway-it run --rm
   lucy-gateway-tests` -> all pass; `.venv/bin/python -m pytest
   tests/test_infrastructure.py -q` -> still green.
-- [ ] **C8 - Python session WS endpoint.** Write
+- [x] **C8 - Python session WS endpoint.** Write
   `tests/test_control_ws_bridge.py` first:
   `test_first_message_must_be_session_started` (close code 1002),
   `test_ws_session_runs_turns_and_returns_tts_speak` (drive golden-shaped
@@ -371,7 +371,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   `src/lucy/serve/control_ws.py` and register it in
   `src/lucy/serve/app.py`. Verify: `.venv/bin/python -m pytest
   tests/test_control_ws_bridge.py -q` -> all pass.
-- [ ] **C9 - Dev gateway WS runner + compose demotion.** Write
+- [x] **C9 - Dev gateway WS runner + compose demotion.** Write
   `tests/test_dev_gateway_ws.py` first:
   `test_dev_gateway_ws_runner_completes_scenario_against_local_server`
   (uvicorn serving `create_app()` on an ephemeral port inside the test),
@@ -383,7 +383,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   dev extra, add/extend the compose services. Verify:
   `.venv/bin/python -m pytest tests/test_dev_gateway_ws.py
   tests/test_infrastructure.py -q` -> all pass.
-- [ ] **C10 - Compose integration profile.** Write
+- [x] **C10 - Compose integration profile.** Write
   `tests/test_gateway_integration.py` (marker `gateway_it`, registered in
   `pyproject.toml` with deselecting `addopts`):
   `test_rust_gateway_oneshot_session_reports_clean_close`,
@@ -393,7 +393,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   `.venv/bin/python -m pytest -m gateway_it
   tests/test_gateway_integration.py -q` -> 2 pass; `.venv/bin/python -m
   pytest -q` -> integration tests deselected by default.
-- [ ] **C11 - Full suite + bookkeeping.** Run the whole Python suite and
+- [x] **C11 - Full suite + bookkeeping.** Run the whole Python suite and
   the full Rust suite, fill "Improvements noted", move this card to
   `done/`. Verify: `.venv/bin/python -m pytest -q` -> full suite green;
   `docker compose --profile gateway-it run --rm lucy-gateway-tests` ->
@@ -439,27 +439,27 @@ server scripting the Python side (a local protocol server, ADR 0003).
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_control_schema_golden.py
+- [x] `.venv/bin/python -m pytest tests/test_control_schema_golden.py
       tests/test_audio_fixture.py tests/test_control_ws_bridge.py
       tests/test_dev_gateway_ws.py tests/test_infrastructure.py -q` ->
       all pass
-- [ ] `docker compose --profile gateway-it run --rm lucy-gateway-tests`
+- [x] `docker compose --profile gateway-it run --rm lucy-gateway-tests`
       -> `cargo test` green, including
       `golden_files_reserialize_byte_identical`
-- [ ] `docker compose --profile gateway-it run --rm lucy-gateway-session`
+- [x] `docker compose --profile gateway-it run --rm lucy-gateway-session`
       -> exit code 0, final stdout line is a JSON report with
       `"clean_close":true` and `turns` == 2
-- [ ] `.venv/bin/python -m pytest -m gateway_it
+- [x] `.venv/bin/python -m pytest -m gateway_it
       tests/test_gateway_integration.py -q` -> 2 pass (Docker daemon up)
-- [ ] `grep -rn "ws://" media-gateway-rust/src src/lucy/serve
+- [x] `grep -rn "ws://" media-gateway-rust/src src/lucy/serve
       src/lucy/transport` -> no matches (URLs injected, never in src)
-- [ ] `grep -rn "preserve_order" media-gateway-rust/Cargo.toml` -> no
+- [x] `grep -rn "preserve_order" media-gateway-rust/Cargo.toml` -> no
       matches
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green with
+- [x] `.venv/bin/python -m pytest -q` -> full suite green with
       `gateway_it` deselected by default (use Docker Compose
       `docker compose run --rm lucy-api pytest` when the daemon is
       available)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; no new follow-up card is required
 
 ## Failure protocol
 
@@ -472,7 +472,51 @@ pending commands listed.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- Python now generates 27 canonical fixtures directly from the registered
+  Pydantic payload models; committed bytes and gateway simulator emissions
+  round-trip without drift (4 tests).
+- The committed caller fixture is real OS-synthesized speech converted to 8 kHz,
+  mono, 16-bit PCM and is paired with a validated two-utterance timeline.
+- Rust conformance currently passes 4 schema tests and 3 fixture-streamer tests
+  in `rust:1.82-bookworm`, including unknown type/field rejection and proof that
+  paced audio frames never become control messages.
+- The Compose conformance profile and release builder now use the tested
+  `rust:1.82-bookworm` image; `docker compose --profile gateway-it run --rm
+  lucy-gateway-tests` passes all 7 schema and fixture tests.
+- The Rust client now proves a real local WebSocket handshake and two-turn
+  session, emits paced playback marks, handles cancellation while playback is
+  active, reports measured RTT/jitter, and prints a canonical oneshot report.
+- The framework app now exposes a strict session WebSocket bridge; its protocol
+  tests prove canonical directives, handshake rejection, and measured gateway
+  RTT mapped into the finalized turn waterfall.
+- The Python simulator now traverses the same real WebSocket endpoint under the
+  opt-in `test` profile; the default Compose gateway remains the Rust service.
+- The opt-in Compose integration suite passes both gateway sessions from clean
+  images with an ephemeral host API port, avoiding collisions while preserving
+  the in-network `lucy-api:8000` contract.
+- Final review fixed real-time 20 ms fixture pacing, Unicode scalar playback
+  marks, and Rust rejection of missing or wrongly typed payload fields.
+- Final evidence: 469 Python tests passed with 2 gateway integration tests
+  deselected by default; the 2 gateway integrations and all 14 Rust tests pass;
+  Docker ruff, format, and mypy gates are clean.
+
+## Review evidence
+
+- code-reviewer: PASS - control flow, session gating, cancellation, metrics, and
+  strict wire validation reviewed; pacing and Unicode findings were fixed.
+- test-auditor: PASS - 27 golden fixtures, malformed-message negatives, recorded
+  WAV, local WS servers, both Compose gateways, and full-suite regression covered.
+- docs-reviewer: PASS - card evidence and Compose profile responsibilities match
+  the open-core media-plane and platform boundaries.
+- simplicity-reviewer: PASS - one shared wire generator, one WS transport, and one
+  Rust session client reuse the existing VoiceSession and simulator contracts.
+- security-reviewer: PASS - no secrets, source URLs, audio frames, or
+  credential-bearing payloads cross the control channel.
+
+Findings disposition:
+
+- None open. Review findings for pacing, Unicode marks, and malformed Rust
+  payload acceptance were fixed and covered by tests.
 
 ## Pending human testing
 
