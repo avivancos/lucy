@@ -95,5 +95,11 @@ async def test_thinking_interruption_is_retained_and_next_turn_id_is_monotonic()
     ]
     history = await driver.checkpointer.history("interrupted-session")
     assert history
-    assert {checkpoint.turn_id for checkpoint in history} == {"turn-2"}
+    assert {checkpoint.turn_id for checkpoint in history} == {"turn-1", "turn-2"}
+    assert (
+        next(
+            checkpoint for checkpoint in history if checkpoint.turn_id == "turn-1"
+        ).kind
+        == "turn_final"
+    )
     assert driver.state.turns == 2

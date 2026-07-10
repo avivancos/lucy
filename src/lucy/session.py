@@ -289,7 +289,7 @@ class VoiceSession:
                     # dropped and its task never leaks (card 64).
                     active.ended_ms = active.ended_ms or event.envelope.ts_ms
                     await self._cancel_task(active)
-                    self._complete(active, tree, records)
+                    await self._complete(active, tree, records)
                 promoted = await controller.reconcile(payload.text)
                 if promoted and speculative_turn is not None:
                     active = speculative_turn
@@ -348,7 +348,7 @@ class VoiceSession:
                         active.tts_ms = event.envelope.ts_ms - active.speak_started_ms
                         active.playback_finished.set()
                         await self._await_task(active)
-                        self._complete(active, tree, records)
+                        await self._complete(active, tree, records)
                         self._set_state(TurnState.IDLE)
                         active = None
 
@@ -367,7 +367,7 @@ class VoiceSession:
         if active is not None:
             active.ended_ms = active.ended_ms or last_ts
             await self._cancel_task(active)
-            self._complete(active, tree, records)
+            await self._complete(active, tree, records)
 
         if self._prefetch_tasks:
             await asyncio.gather(*list(self._prefetch_tasks), return_exceptions=True)
@@ -511,10 +511,10 @@ class VoiceSession:
         # its stream-end barrier was never sent - send it here (exactly-once is
         # guarded by turn.barrier_sent) or the gateway's drain would deadlock.
         await self._send_stream_end(turn)
-        self._complete(turn, tree, records)
+        await self._complete(turn, tree, records)
         self._set_state(TurnState.LISTENING)
 
-    def _complete(
+    async def _complete(
         self, turn: _ActiveTurn, tree: TurnSpanTree, records: List[TurnRecord]
     ) -> None:
         record = self._finalize(turn, tree)
@@ -527,6 +527,9 @@ class VoiceSession:
         reconcile_history = getattr(self.driver, "reconcile_history", None)
         if callable(reconcile_history):
             reconcile_history(tuple(self._history))
+        persist_history = getattr(self.driver, "persist_reconciled_history", None)
+        if callable(persist_history):
+            await persist_history()
 
     async def _await_task(self, turn: _ActiveTurn) -> None:
         if turn.task is not None:

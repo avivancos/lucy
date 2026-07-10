@@ -243,17 +243,20 @@ class GraphTurnDriver:
         graph: "CompiledAgentGraph[ConversationState]",
         *,
         session_id: str,
+        thread_id: Optional[str] = None,
         clock: Clock,
         state: Optional[ConversationState] = None,
     ) -> None:
         self.graph = graph
         self.session_id = session_id
+        self.thread_id = thread_id or session_id
         self.clock = clock
         self.state = state or ConversationState()
         self._history_base_transcript = [
             line.model_copy(deep=True) for line in self.state.transcript
         ]
         self._history_base_turns = self.state.turns
+        self._reconciled_turn_id: Optional[str] = None
 
     @property
     def checkpointer(self) -> Optional[CheckpointStore]:
@@ -286,6 +289,7 @@ class GraphTurnDriver:
         ctx = TurnContext(
             payload={"user_text": user_text},
             session_id=self.session_id,
+            thread_id=self.thread_id,
             turn_id=turn_id,
             clock=self.clock,
             emit=emit,
@@ -364,12 +368,66 @@ class GraphTurnDriver:
                 "turns": self._history_base_turns + session_turns,
             }
         )
+        self._reconciled_turn_id = "turn-%d" % self.state.turns
+
+    async def persist_reconciled_history(self) -> None:
+        checkpointer = self.graph.checkpointer
+        turn_id = self._reconciled_turn_id
+        if checkpointer is None or turn_id is None:
+            return
+
+        history = await checkpointer.history(self.thread_id)
+        current_turn = [
+            checkpoint
+            for checkpoint in history
+            if checkpoint.session_id == self.session_id
+            and checkpoint.turn_id == turn_id
+        ]
+        final = next(
+            (
+                checkpoint
+                for checkpoint in reversed(current_turn)
+                if checkpoint.kind == "turn_final"
+            ),
+            None,
+        )
+        if final is not None and final.state == self.state:
+            self._reconciled_turn_id = None
+            return
+        if final is not None:
+            corrected = final.model_copy(
+                update={
+                    "state": self.state.model_copy(deep=True),
+                    "created_at_ms": int(self.clock.monotonic() * 1000),
+                },
+                deep=True,
+            )
+        else:
+            superstep = (
+                max(
+                    (checkpoint.superstep for checkpoint in current_turn),
+                    default=0,
+                )
+                + 1
+            )
+            corrected = Checkpoint(
+                checkpoint_id=checkpoint_id(self.session_id, turn_id, superstep),
+                session_id=self.session_id,
+                thread_id=self.thread_id,
+                turn_id=turn_id,
+                superstep=superstep,
+                kind="turn_final",
+                state=self.state,
+                created_at_ms=int(self.clock.monotonic() * 1000),
+            )
+        await checkpointer.save(corrected)
+        self._reconciled_turn_id = None
 
     async def _save_turn_final(self, turn_id: str, state: ConversationState) -> None:
         checkpointer = self.graph.checkpointer
         if checkpointer is None:
             return
-        history = await checkpointer.history(self.session_id)
+        history = await checkpointer.history(self.thread_id)
         last_superstep = max(
             (
                 checkpoint.superstep
@@ -383,6 +441,7 @@ class GraphTurnDriver:
             Checkpoint(
                 checkpoint_id=checkpoint_id(self.session_id, turn_id, final_superstep),
                 session_id=self.session_id,
+                thread_id=self.thread_id,
                 turn_id=turn_id,
                 superstep=final_superstep,
                 kind="turn_final",
@@ -413,9 +472,17 @@ class GraphTurnDriver:
         graph: "CompiledAgentGraph[ConversationState]",
         *,
         session_id: str,
+        thread_id: Optional[str] = None,
         store: CheckpointStore,
         clock: Clock,
     ) -> "GraphTurnDriver":
-        latest = await store.load_latest(session_id)
+        resolved_thread_id = thread_id or session_id
+        latest = await store.load_latest(resolved_thread_id)
         state = latest.state if latest is not None else ConversationState()
-        return cls(graph, session_id=session_id, clock=clock, state=state)
+        return cls(
+            graph,
+            session_id=session_id,
+            thread_id=resolved_thread_id,
+            clock=clock,
+            state=state,
+        )

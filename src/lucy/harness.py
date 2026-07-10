@@ -99,7 +99,8 @@ class ConversationHarness:
         checkpoints: List[Checkpoint] = []
         checkpointer = getattr(driver, "checkpointer", None) if driver else None
         if checkpointer is not None:
-            checkpoints = await checkpointer.history(self.session_id)
+            checkpoint_thread = getattr(driver, "thread_id", self.session_id)
+            checkpoints = await checkpointer.history(checkpoint_thread)
 
         transcript: List[Tuple[str, str]] = []
         for record in records:
@@ -130,12 +131,12 @@ class ConversationHarness:
                 diverged_at_checkpoint_id=None,
             )
 
-        session_id = checkpoints[0].session_id
+        thread_id = checkpoints[0].thread_id
         last_superstep_by_turn: dict[str, int] = {}
         closed_turns: set[str] = set()
         for checkpoint in checkpoints:
-            if checkpoint.session_id != session_id:
-                raise GraphValidationError("replay checkpoints span sessions")
+            if checkpoint.thread_id != thread_id:
+                raise GraphValidationError("replay checkpoints span threads")
             previous = last_superstep_by_turn.get(checkpoint.turn_id)
             if previous is not None and checkpoint.superstep < previous:
                 raise GraphValidationError("checkpoint supersteps are not monotonic")

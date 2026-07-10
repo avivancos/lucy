@@ -30,6 +30,7 @@ class GraphContext:
     results: Dict[str, Any] = field(default_factory=dict)
     trace: List[TraceEvent] = field(default_factory=list)
     session_id: str = ""
+    thread_id: str = ""
     turn_id: str = ""
 
 

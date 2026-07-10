@@ -274,6 +274,7 @@ class CompiledAgentGraph(Generic[StateT]):
             Checkpoint(
                 checkpoint_id=checkpoint_id(ctx.session_id, ctx.turn_id, superstep),
                 session_id=ctx.session_id,
+                thread_id=ctx.thread_id or ctx.session_id,
                 turn_id=ctx.turn_id,
                 superstep=superstep,
                 kind=kind,  # type: ignore[arg-type]

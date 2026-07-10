@@ -48,9 +48,10 @@ Supporting contracts:
   partials with abort-on-revision, sentence-streaming TTS, prompt caching) are
   configuration-gated.
 - Conversation state (transcript, funnel stage, slots, tool results) is
-  checkpointed per superstep behind a `CheckpointStore` protocol (in-memory
-  default; persistent adapters later) to enable mid-call handoff and post-call
-  replay.
+  checkpointed per superstep behind a `CheckpointStore` protocol. The
+  in-memory default and optional Postgres/Redis adapters key history by stable
+  `thread_id` while retaining each telephony `session_id`, enabling cross-call
+  resume, mid-call handoff, and post-call replay.
 
 Testing follows ADR 0003: an in-process gateway simulator implements the same
 control-channel schema, scripted by the synthetic scenarios in

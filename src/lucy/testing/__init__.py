@@ -9,6 +9,7 @@ works for one release but emits ``DeprecationWarning``.
 
 from __future__ import annotations
 
+from lucy.testing.checkpoint import check_checkpoint_store
 from lucy.testing.mcp import LocalMcpCommandTransport
 from lucy.testing.metrics import LocalMetricEventChannel
 from lucy.testing.observe import InMemoryOtelSpanExporter, InMemoryTraceExporter
@@ -23,4 +24,5 @@ __all__ = [
     "InMemoryOtelSpanExporter",
     "InMemoryTraceExporter",
     "LocalMetricEventChannel",
+    "check_checkpoint_store",
 ]

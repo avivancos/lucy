@@ -1,10 +1,10 @@
-"""Conversation state and in-process checkpoints for AgentGraph turns."""
+"""Conversation state and checkpoint-store contracts for AgentGraph turns."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from lucy.specs import FunnelStage
 
@@ -39,19 +39,27 @@ class ConversationState(BaseModel):
 class Checkpoint(BaseModel):
     checkpoint_id: str
     session_id: str
+    thread_id: str
     turn_id: str
     superstep: int
     kind: Literal["superstep", "turn_final"]
     state: ConversationState
     created_at_ms: int
 
+    @model_validator(mode="before")
+    @classmethod
+    def default_thread_to_session(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not data.get("thread_id"):
+            data = {**data, "thread_id": data.get("session_id", "")}
+        return data
+
 
 class CheckpointStore(Protocol):
     async def save(self, checkpoint: Checkpoint) -> None: ...
 
-    async def load_latest(self, session_id: str) -> Optional[Checkpoint]: ...
+    async def load_latest(self, thread_id: str) -> Optional[Checkpoint]: ...
 
-    async def history(self, session_id: str) -> List[Checkpoint]: ...
+    async def history(self, thread_id: str) -> List[Checkpoint]: ...
 
 
 def checkpoint_id(session_id: str, turn_id: str, superstep: int) -> str:
@@ -69,17 +77,22 @@ class InMemoryCheckpointStore:
         self._items: List[Checkpoint] = []
 
     async def save(self, checkpoint: Checkpoint) -> None:
-        self._items.append(_copy_checkpoint(checkpoint))
+        copied = _copy_checkpoint(checkpoint)
+        for index, item in enumerate(self._items):
+            if item.checkpoint_id == copied.checkpoint_id:
+                self._items[index] = copied
+                return
+        self._items.append(copied)
 
-    async def load_latest(self, session_id: str) -> Optional[Checkpoint]:
+    async def load_latest(self, thread_id: str) -> Optional[Checkpoint]:
         for item in reversed(self._items):
-            if item.session_id == session_id:
+            if item.thread_id == thread_id:
                 return _copy_checkpoint(item)
         return None
 
-    async def history(self, session_id: str) -> List[Checkpoint]:
+    async def history(self, thread_id: str) -> List[Checkpoint]:
         return [
             _copy_checkpoint(item)
             for item in self._items
-            if item.session_id == session_id
+            if item.thread_id == thread_id
         ]

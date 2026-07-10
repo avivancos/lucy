@@ -45,12 +45,14 @@ def _checkpoint(
     turn_id: str = "t",
     superstep: int = 1,
     *,
+    thread_id: str | None = None,
     state: ConversationState | None = None,
     kind: str = "superstep",
 ) -> Checkpoint:
     return Checkpoint(
         checkpoint_id=checkpoint_id(session_id, turn_id, superstep),
         session_id=session_id,
+        thread_id=thread_id,
         turn_id=turn_id,
         superstep=superstep,
         kind=kind,
@@ -63,6 +65,14 @@ def test_checkpoint_id_is_deterministic():
     checkpoint = _checkpoint("session", "turn", 7)
 
     assert checkpoint.checkpoint_id == "session:turn:7"
+    assert checkpoint.thread_id == "session"
+
+
+def test_checkpoint_thread_identity_is_additive_and_explicit():
+    checkpoint = _checkpoint("call-2", thread_id="customer-thread")
+
+    assert checkpoint.session_id == "call-2"
+    assert checkpoint.thread_id == "customer-thread"
 
 
 async def test_load_latest_returns_newest_checkpoint():
@@ -74,6 +84,19 @@ async def test_load_latest_returns_newest_checkpoint():
 
     assert latest is not None
     assert latest.superstep == 2
+
+
+async def test_memory_store_loads_across_sessions_by_thread_identity():
+    store = InMemoryCheckpointStore()
+    await store.save(_checkpoint("call-1", thread_id="thread-a", superstep=1))
+    await store.save(_checkpoint("call-2", thread_id="thread-a", superstep=2))
+
+    latest = await store.load_latest("thread-a")
+    history = await store.history("thread-a")
+
+    assert latest is not None
+    assert latest.session_id == "call-2"
+    assert [checkpoint.session_id for checkpoint in history] == ["call-1", "call-2"]
 
 
 async def test_history_returns_copies_in_save_order():
@@ -272,8 +295,30 @@ async def test_replay_flags_divergence_on_tampered_events():
     assert replay.diverged_at_checkpoint_id == result.checkpoints[-1].checkpoint_id
 
 
-def test_replay_rejects_cross_session_checkpoints():
+def test_replay_rejects_cross_thread_checkpoints():
     harness = ConversationHarness()
 
     with pytest.raises(GraphValidationError):
         harness.replay([_checkpoint("s1"), _checkpoint("s2")], [])
+
+
+def test_replay_accepts_multiple_sessions_in_one_thread():
+    harness = ConversationHarness()
+    checkpoints = [
+        _checkpoint(
+            "call-1",
+            "turn-1",
+            thread_id="thread-a",
+            kind="turn_final",
+        ),
+        _checkpoint(
+            "call-2",
+            "turn-2",
+            thread_id="thread-a",
+            kind="turn_final",
+        ),
+    ]
+
+    replay = harness.replay(checkpoints, [])
+
+    assert replay.matches_final_checkpoint is True
