@@ -57,6 +57,13 @@ client-side PII redaction path as transcripts and tool arguments.
 | `transcript` | `turn_id`, `role` (caller/agent), `text` (final segments only, post-redaction) |
 | `audio_ref` | `turn_id?`, `blob_id`, `upload_url_requested` (audio bytes never inline) |
 
+`audio_ref` is emitted only after the media plane reports a successful
+`recording.uploaded` control event. Its `blob_id` is the join key; recording
+metadata such as leg, duration, byte count, SHA-256, container, and consent
+reference remains on the control event and can be copied into additive span
+attributes. `upload_url_ref` is opaque and must never contain credentials or raw
+audio.
+
 ## Privacy controls (enforced client-side, in open code)
 
 Nothing sensitive leaves the process unless explicitly enabled:

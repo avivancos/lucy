@@ -3,7 +3,7 @@
 **Sprint:** S6 - Provider ecosystem
 **Epic:** Media gateway
 **Estimated effort:** ~14 h
-**Depends on:** 32
+**Depends on:** 32, 70
 **State:** pending
 
 ## Goal
@@ -34,8 +34,9 @@ Read, in this order, before writing anything:
   protocol servers are the only sanctioned test doubles.
 - `docs/adr/0010-open-core-split.md` - the Rust media gateway is open SDK
   code; nothing platform-shaped belongs in it.
-- `src/lucy/transport/schema.py` (built in card 32) - THE source of truth:
-  `Envelope`, all 16 payload models, `parse_event`,
+- `src/lucy/transport/schema.py` (built in card 32, extended by card 70) - THE
+  source of truth: `Envelope`, all landed payload models including recording,
+  `parse_event`,
   `UnknownControlMessage`. Read the landed code for the exact wire shape
   and `type` strings; this card mirrors, never redefines.
 - `src/lucy/transport/dev_gateway.py` (built in card 32) -
@@ -93,8 +94,9 @@ One canonical serialization, identical in both languages:
   `GOLDEN_TS_MS = 1_700_000_000_000`. Regeneration must be byte-stable.
 - `golden_messages() -> dict[str, dict]` - maps each wire `type` string to
   ONE complete wire message exactly as `parse_event` accepts it
-  (envelope + payload, in whatever composition card 32 landed). Covers all
-  16 payload models from card 32: upstream `SessionStarted`,
+  (envelope + payload, in whatever composition the schema landed). Covers all
+  27 payload models currently registered in `MESSAGE_TYPES`, including the
+  recording messages from card 70. The base upstream family includes `SessionStarted`,
   `VadSpeechStart`, `VadSpeechEnd`, `SttPartial`, `SttFinal`, `Dtmf`,
   `TtsPlayback`, `BargeIn`, `TransportMetrics`, `SessionEnded`; downstream
   `SessionConfigure`, `TtsSpeak`, `TtsCancel`, `DtmfSend`, `Transfer`,
@@ -139,7 +141,7 @@ untouched (`tests/test_infrastructure.py` greps for all three).
 
 - serde structs mirroring the exact wire shape `parse_event` accepts, all
   with `#[serde(deny_unknown_fields)]`, plus a `ControlMessage` enum
-  dispatched on the wire `type` string covering all 16 types. The golden
+  dispatched on the wire `type` string covering all 27 types. The golden
   fixtures are normative: derive struct layout from them and from the
   landed `schema.py`, never from this card's prose. Unknown `type` or
   extra fields must fail deserialization.
@@ -305,7 +307,7 @@ server scripting the Python side (a local protocol server, ADR 0003).
   `src/lucy/transport/golden.py` and generate the fixtures with
   `python -m lucy.transport.golden tests/fixtures/control_schema`.
   Verify: `.venv/bin/python -m pytest
-  tests/test_control_schema_golden.py -q` -> >=3 pass, 16 golden files
+  tests/test_control_schema_golden.py -q` -> >=3 pass, 27 golden files
   committed.
 - [ ] **C2 - Simulator byte-compatibility.** Test first, same file:
   `test_dev_gateway_emissions_canonicalize_and_reparse_byte_identical` -

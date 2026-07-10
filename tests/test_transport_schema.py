@@ -6,6 +6,12 @@ from lucy.transport.schema import (
     MESSAGE_TYPES,
     BargeIn,
     Envelope,
+    RecordingFailed,
+    RecordingStart,
+    RecordingStarted,
+    RecordingStop,
+    RecordingUploaded,
+    SessionStarted,
     SttFinal,
     SttPartial,
     TtsPlayback,
@@ -82,3 +88,78 @@ def test_stability_and_state_are_constrained():
         TtsPlayback(utterance_id="u", state="bogus", mark_chars=0)  # literal
     with pytest.raises(ValidationError):
         BargeIn(at_ms=1, during="dancing", utterance_id=None)  # literal
+
+
+def test_session_started_features_are_additive_and_default_empty():
+    legacy = SessionStarted(transport="sim", caller="caller", codecs=["pcmu"])
+    capable = legacy.model_copy(update={"features": ["recording"]})
+
+    assert legacy.features == []
+    assert parse_event(_wire("session.started", capable)).payload == capable
+
+
+def test_recording_control_messages_round_trip_without_audio_bytes():
+    samples = {
+        "recording.start": RecordingStart(
+            recording_id="rec-1",
+            leg="mixed",
+            blob_id="blob-1",
+            upload_url_ref="upload-ref-1",
+            container="wav",
+            consent_ref="consent-1",
+        ),
+        "recording.stop": RecordingStop(recording_id="rec-1"),
+        "recording.started": RecordingStarted(
+            recording_id="rec-1",
+            leg="mixed",
+            blob_id="blob-1",
+            consent_ref="consent-1",
+        ),
+        "recording.uploaded": RecordingUploaded(
+            recording_id="rec-1",
+            leg="mixed",
+            blob_id="blob-1",
+            upload_url_ref="upload-ref-1",
+            duration_ms=1000,
+            byte_count=32000,
+            sha256="a" * 64,
+            container="wav",
+            consent_ref="consent-1",
+        ),
+        "recording.failed": RecordingFailed(
+            recording_id="rec-1", error_code="upload_failed", retryable=True
+        ),
+    }
+
+    for type_, payload in samples.items():
+        raw = _wire(type_, payload)
+        assert parse_event(raw).payload == payload
+        assert "audio" not in raw
+
+
+def test_recording_messages_reject_audio_extra_fields_and_bad_hashes():
+    raw = _wire("recording.stop", RecordingStop(recording_id="rec-1"))
+    raw["audio"] = "forbidden"
+    with pytest.raises(ValidationError):
+        parse_event(raw)
+    with pytest.raises(ValidationError):
+        RecordingUploaded(
+            recording_id="rec-1",
+            leg="caller",
+            blob_id="blob-1",
+            upload_url_ref="upload-ref-1",
+            duration_ms=1,
+            byte_count=1,
+            sha256="not-a-sha",
+            container="wav",
+            consent_ref="consent-1",
+        )
+    with pytest.raises(ValidationError):
+        RecordingStart(
+            recording_id="rec-1",
+            leg="mixed",
+            blob_id="blob-1",
+            upload_url_ref="https://blob.test?signature=secret",
+            container="wav",
+            consent_ref="consent-1",
+        )

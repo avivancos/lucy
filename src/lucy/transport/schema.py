@@ -38,6 +38,7 @@ class SessionStarted(_Strict):
     transport: str
     caller: str
     codecs: List[str]
+    features: List[str] = Field(default_factory=list)
 
 
 class VadSpeechStart(_Strict):
@@ -90,6 +91,35 @@ class TransportMetrics(_Strict):
 
 class SessionEnded(_Strict):
     reason: str
+
+
+RECORDING_FEATURE = "recording"
+RecordingLeg = Literal["caller", "agent", "mixed"]
+
+
+class RecordingStarted(_Strict):
+    recording_id: str
+    leg: RecordingLeg
+    blob_id: str
+    consent_ref: str
+
+
+class RecordingUploaded(_Strict):
+    recording_id: str
+    leg: RecordingLeg
+    blob_id: str
+    upload_url_ref: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    duration_ms: int = Field(ge=0)
+    byte_count: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    container: str
+    consent_ref: str
+
+
+class RecordingFailed(_Strict):
+    recording_id: str
+    error_code: str
+    retryable: bool = False
 
 
 # -- downstream payloads (python -> gateway) ---------------------------------
@@ -152,6 +182,19 @@ class SessionEnd(_Strict):
     reason: str
 
 
+class RecordingStart(_Strict):
+    recording_id: str
+    leg: RecordingLeg
+    blob_id: str
+    upload_url_ref: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    container: str
+    consent_ref: str
+
+
+class RecordingStop(_Strict):
+    recording_id: str
+
+
 UPSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "session.started": SessionStarted,
     "vad.speech_start": VadSpeechStart,
@@ -164,6 +207,9 @@ UPSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "barge_in": BargeIn,
     "transport.metrics": TransportMetrics,
     "session.ended": SessionEnded,
+    "recording.started": RecordingStarted,
+    "recording.uploaded": RecordingUploaded,
+    "recording.failed": RecordingFailed,
 }
 
 DOWNSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
@@ -178,6 +224,8 @@ DOWNSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "dial": Dial,
     "hold": Hold,
     "session.end": SessionEnd,
+    "recording.start": RecordingStart,
+    "recording.stop": RecordingStop,
 }
 
 MESSAGE_TYPES: Dict[str, Type[BaseModel]] = {**UPSTREAM_TYPES, **DOWNSTREAM_TYPES}
