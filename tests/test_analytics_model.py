@@ -67,3 +67,12 @@ def test_rollup_example_payload_is_valid_json():
     assert payload["schema_version"] == "analytics-model/v1"
     assert payload["measures"]
     assert payload["derived_metrics"]
+    measures = payload["measures"]
+    assert measures["total_cost"] == sum(
+        measures[field]
+        for field in CostBreakdown.model_fields
+        if field != "billable_audio_minutes"
+    )
+    assert measures["total_ms"] == sum(
+        measures[field] for field in LatencyWaterfall.model_fields
+    )

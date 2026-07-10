@@ -127,12 +127,12 @@ Worked `RunRollup` example:
     "total_cost": 0.095,
     "billable_audio_minutes": 1.5,
     "stt_ms": 240.0,
-    "rag_ms": 15.0,
+    "rag_ms": 72.0,
     "llm_ms": 205.0,
     "mcp_tools_ms": 35.0,
-    "tts_ms": 120.0,
-    "transport_ms": 18.0,
-    "total_ms": 633.0,
+    "tts_ms": 95.0,
+    "transport_ms": 84.0,
+    "total_ms": 731.0,
     "turn_count": 3,
     "session_count": 1,
     "tool_call_count": 1,
@@ -141,13 +141,13 @@ Worked `RunRollup` example:
     "deadline_miss_count": 0
   },
   "latency_percentiles": {
-    "stt_ms": {"p50": 80.0, "p95": 90.0, "p99": 90.0},
-    "rag_ms": {"p50": 5.0, "p95": 5.0, "p99": 5.0},
-    "llm_ms": {"p50": 65.0, "p95": 75.0, "p99": 75.0},
+    "stt_ms": {"p50": 120.0, "p95": 120.0, "p99": 120.0},
+    "rag_ms": {"p50": 24.0, "p95": 24.0, "p99": 24.0},
+    "llm_ms": {"p50": 0.0, "p95": 205.0, "p99": 205.0},
     "mcp_tools_ms": {"p50": 0.0, "p95": 35.0, "p99": 35.0},
-    "tts_ms": {"p50": 40.0, "p95": 45.0, "p99": 45.0},
-    "transport_ms": {"p50": 6.0, "p95": 7.0, "p99": 7.0},
-    "total_ms": {"p50": 196.0, "p95": 246.0, "p99": 246.0}
+    "tts_ms": {"p50": 0.0, "p95": 95.0, "p99": 95.0},
+    "transport_ms": {"p50": 28.0, "p95": 28.0, "p99": 28.0},
+    "total_ms": {"p50": 207.0, "p95": 352.0, "p99": 352.0}
   },
   "derived_metrics": {
     "cost_per_minute": 0.063333,
