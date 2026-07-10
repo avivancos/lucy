@@ -189,6 +189,13 @@ class LocalGatewaySimulator:
         # bounds the wait, so this resolves without deadlock).
         utterances = await self._collect_turn_directives(turn_id)
         if not utterances:
+            if interrupt:
+                self._ts_ms += self.budgets.gateway_pacing_ms
+                yield self._emit(
+                    "barge_in",
+                    BargeIn(at_ms=self._ts_ms, during="thinking"),
+                    turn_id=turn_id,
+                )
             return
 
         # started for the first clause only; the session's SPEAKING transition

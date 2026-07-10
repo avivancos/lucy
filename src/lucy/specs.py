@@ -7,6 +7,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from lucy.providers import LOCAL_PROVIDER_NAME
+
 
 class FunnelStage(str, Enum):
     QUALIFIED = "qualified"
@@ -38,6 +40,7 @@ class VoiceSpec(BaseModel):
     transport: str
     stt_provider: str
     tts_provider: str
+    llm_provider: str = LOCAL_PROVIDER_NAME
     vad_enabled: bool = True
     barge_in_enabled: bool = True
     modulation: VoiceModulationSpec = Field(default_factory=VoiceModulationSpec)

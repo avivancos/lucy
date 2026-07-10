@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
-from typing import AsyncIterator, Dict, List, Optional, Union
+from typing import AsyncIterator, Dict, List, Optional
 from urllib.parse import urlencode
 
 import websockets
 
-from lucy.llm import (
-    LlmStreamEvent,
-    ToolCallDelta,
-    ToolCallReady,
-    UsageReport,
+from lucy.drivers import (
+    RealtimeAssistantDelta,
+    RealtimeAssistantDone,
+    RealtimeEvent,
+    RealtimeSessionConfig,
+    RealtimeUserTranscript,
 )
+from lucy.llm import ToolCallReady, UsageReport
 from lucy.testing.replay import RecordedFrame
+from lucy.tools import ToolDef, ToolResult
 from lucy.voice import ProviderPayloadError
 
 from lucy_openai.settings import OpenAiSettings
@@ -35,14 +37,13 @@ TRANSCRIPT_DELTA_TYPES = frozenset(
         "response.audio_transcript.delta",
     }
 )
-
-
-@dataclass(frozen=True)
-class RealtimeTranscriptDelta:
-    text: str
-
-
-RealtimeControlEvent = Union[RealtimeTranscriptDelta, LlmStreamEvent]
+TRANSCRIPT_DONE_TYPES = frozenset(
+    {
+        "response.output_text.done",
+        "response.output_audio_transcript.done",
+        "response.audio_transcript.done",
+    }
+)
 
 
 class OpenAiRealtimeWebSocketTransport:
@@ -106,6 +107,9 @@ class OpenAiRealtimeSession:
         self.transport = transport
         self._owns_transport = owns_transport
         self._tool_states: Dict[str, Dict[str, str]] = {}
+        self._pending_call_ids: List[str] = []
+        self._assistant_text = ""
+        self._utterance_id = "realtime"
 
     async def send_text(self, text: str) -> None:
         if not text.strip():
@@ -122,7 +126,9 @@ class OpenAiRealtimeSession:
         )
         await self.transport.send({"type": "response.create"})
 
-    async def events(self) -> AsyncIterator[RealtimeControlEvent]:
+    async def events(self) -> AsyncIterator[RealtimeEvent]:
+        self._assistant_text = ""
+        self._utterance_id = "realtime"
         while True:
             payload = await self.transport.receive()
             event_type = payload.get("type")
@@ -135,10 +141,31 @@ class OpenAiRealtimeSession:
                         "OpenAI Realtime transcript delta must be a string"
                     )
                 if delta:
-                    yield RealtimeTranscriptDelta(text=delta)
+                    self._assistant_text += delta
+                    utterance_id = payload.get("item_id") or payload.get("response_id")
+                    if isinstance(utterance_id, str):
+                        self._utterance_id = utterance_id
+                    yield RealtimeAssistantDelta(self._utterance_id, delta)
+                continue
+            if event_type in TRANSCRIPT_DONE_TYPES:
+                transcript = payload.get("text", payload.get("transcript"))
+                if isinstance(transcript, str):
+                    self._assistant_text = transcript
+                continue
+            if event_type == "conversation.item.input_audio_transcription.delta":
+                delta = payload.get("delta")
+                if not isinstance(delta, str):
+                    raise ProviderPayloadError("invalid Realtime user transcript")
+                yield RealtimeUserTranscript(delta, final=False)
+                continue
+            if event_type == "conversation.item.input_audio_transcription.completed":
+                transcript = payload.get("transcript")
+                if not isinstance(transcript, str):
+                    raise ProviderPayloadError("invalid Realtime user transcript")
+                yield RealtimeUserTranscript(transcript, final=True)
                 continue
             if event_type == "response.function_call_arguments.delta":
-                yield self._tool_delta(payload)
+                self._tool_delta(payload)
                 continue
             if event_type == "response.function_call_arguments.done":
                 yield self._tool_ready(payload)
@@ -148,18 +175,34 @@ class OpenAiRealtimeSession:
                 usage = response.get("usage")
                 if usage is not None:
                     yield _usage(_object(usage, "Realtime usage"))
+                yield RealtimeAssistantDone(self._utterance_id, self._assistant_text)
                 return
 
-    async def send_tool_result(self, call_id: str, result: dict) -> None:
-        if not call_id or not isinstance(result, dict):
-            raise ProviderPayloadError("invalid Realtime tool result")
+    async def send_tool_result(self, result: ToolResult) -> None:
+        call_id = (
+            self._pending_call_ids.pop(0) if self._pending_call_ids else result.tool_key
+        )
+        output = (
+            result.value
+            if result.ok
+            else {
+                "ok": False,
+                "error_kind": result.error_kind,
+                "error": result.error,
+            }
+        )
         await self.transport.send(
             {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": json.dumps(result, sort_keys=True, separators=(",", ":")),
+                    "output": json.dumps(
+                        output,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ),
                 },
             }
         )
@@ -172,14 +215,13 @@ class OpenAiRealtimeSession:
         if self._owns_transport and hasattr(self.transport, "close"):
             await self.transport.close()
 
-    def _tool_delta(self, payload: dict) -> ToolCallDelta:
+    def _tool_delta(self, payload: dict) -> None:
         call_id = payload.get("call_id")
         delta = payload.get("delta")
         if not isinstance(call_id, str) or not isinstance(delta, str):
             raise ProviderPayloadError("invalid Realtime tool-call delta")
         state = self._tool_states.setdefault(call_id, {"name": "", "arguments": ""})
         state["arguments"] += delta
-        return ToolCallDelta(call_id=call_id, name=None, arguments_delta=delta)
 
     def _tool_ready(self, payload: dict) -> ToolCallReady:
         call_id = payload.get("call_id")
@@ -196,6 +238,7 @@ class OpenAiRealtimeSession:
             raise ProviderPayloadError("invalid Realtime tool arguments") from exc
         if not isinstance(parsed, dict):
             raise ProviderPayloadError("Realtime tool arguments must be an object")
+        self._pending_call_ids.append(call_id)
         return ToolCallReady(call_id=call_id, name=name, arguments=parsed)
 
 
@@ -210,14 +253,12 @@ class OpenAiRealtimeAdapter:
         self.settings = settings or OpenAiSettings()
         self.transport = transport
 
-    async def open(self, config: dict) -> OpenAiRealtimeSession:
+    async def open(self, config: RealtimeSessionConfig) -> OpenAiRealtimeSession:
         if (
             self.settings.api_key is None
             or not self.settings.api_key.get_secret_value()
         ):
             raise RuntimeError("OPENAI_API_KEY is required")
-        if not isinstance(config, dict):
-            raise ProviderPayloadError("Realtime session config must be an object")
         transport = self.transport or OpenAiRealtimeWebSocketTransport(
             self.settings, self.model
         )
@@ -227,10 +268,28 @@ class OpenAiRealtimeAdapter:
         await transport.send(
             {
                 "type": "session.update",
-                "session": {"type": "realtime", **config},
+                "session": {
+                    "type": "realtime",
+                    "instructions": config.system_prompt,
+                    "output_modalities": ["text"],
+                    **(
+                        {"tools": [_tool_schema(tool) for tool in config.tools]}
+                        if config.tools
+                        else {}
+                    ),
+                },
             }
         )
         return session
+
+
+def _tool_schema(tool: ToolDef) -> dict:
+    return {
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.json_schema,
+    }
 
 
 def _object(value: object, label: str) -> dict:

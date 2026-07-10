@@ -3,23 +3,29 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
+from lucy.drivers import (
+    RealtimeAssistantDelta,
+    RealtimeAssistantDone,
+    RealtimeSessionConfig,
+)
 from lucy.llm import UsageReport
 from lucy.testing.replay import ReplayTransport, load_fixture
+from lucy.tools import ToolResult
 
 from lucy_openai import realtime_factory
 from lucy_openai.realtime import (
     OpenAiRealtimeAdapter,
     OpenAiRealtimeSession,
-    RealtimeTranscriptDelta,
 )
 from lucy_openai.settings import OpenAiSettings
 
 FIXTURE = Path(__file__).parent / "fixtures" / "realtime_text_turn.jsonl"
 MODEL = "gpt-realtime"
-CONFIG = {
-    "instructions": "Reply briefly and clearly.",
-    "output_modalities": ["text"],
-}
+CONFIG = RealtimeSessionConfig(
+    provider="openai",
+    model=MODEL,
+    system_prompt="Reply briefly and clearly.",
+)
 USER_TEXT = "Reply with exactly: realtime Lucy"
 TOOL_CALL_ID = "recorded-call"
 TOOL_RESULT = {"temperature_c": 18}
@@ -50,10 +56,11 @@ async def test_realtime_session_streams_transcript_deltas():
     await session.send_text(USER_TEXT)
     events = [event async for event in session.events()]
 
-    deltas = [event for event in events if isinstance(event, RealtimeTranscriptDelta)]
+    deltas = [event for event in events if isinstance(event, RealtimeAssistantDelta)]
     assert deltas
     assert "realtime Lucy" in "".join(event.text for event in deltas)
-    assert isinstance(events[-1], UsageReport)
+    assert any(isinstance(event, UsageReport) for event in events)
+    assert isinstance(events[-1], RealtimeAssistantDone)
 
 
 async def test_interrupt_sends_response_cancel():
@@ -77,7 +84,7 @@ async def test_send_tool_result_frames_match_recorded_shape():
     )
     session = OpenAiRealtimeSession(ReplayTransport(list(frames[start : start + 2])))
 
-    await session.send_tool_result(TOOL_CALL_ID, TOOL_RESULT)
+    await session.send_tool_result(ToolResult(TOOL_CALL_ID, True, value=TOOL_RESULT))
 
 
 def test_realtime_factory_without_key_raises_named_error():

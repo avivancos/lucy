@@ -119,6 +119,16 @@ class TtsStreamEnd(_Strict):
     from its own playout queue."""
 
 
+class RealtimeConnect(_Strict):
+    provider: str
+    model: str
+
+
+class RealtimeToolResult(_Strict):
+    call_id: str
+    output_json: str
+
+
 class DtmfSend(_Strict):
     digits: str
 
@@ -161,6 +171,8 @@ DOWNSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "tts.speak": TtsSpeak,
     "tts.cancel": TtsCancel,
     "tts.stream_end": TtsStreamEnd,
+    "realtime.connect": RealtimeConnect,
+    "realtime.tool_result": RealtimeToolResult,
     "dtmf.send": DtmfSend,
     "transfer": Transfer,
     "dial": Dial,

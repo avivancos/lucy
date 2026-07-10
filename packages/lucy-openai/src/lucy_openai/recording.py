@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from lucy.llm import LlmMessage, LlmRequest
+from lucy.drivers import RealtimeSessionConfig
 from lucy.testing.record import RecordingResult
+from lucy.tools import ToolResult
 
 from lucy_openai.llm import OpenAiLlmAdapter, OpenAiSseTransport
 from lucy_openai.realtime import (
@@ -83,16 +85,19 @@ async def realtime_text_turn() -> RecordingResult:
         "gpt-realtime", settings=settings, transport=transport
     )
     session = await adapter.open(
-        {
-            "instructions": "Reply briefly and clearly.",
-            "output_modalities": ["text"],
-        }
+        RealtimeSessionConfig(
+            provider="openai",
+            model="gpt-realtime",
+            system_prompt="Reply briefly and clearly.",
+        )
     )
     try:
         await session.send_text("Reply with exactly: realtime Lucy")
         async for _ in session.events():
             pass
-        await session.send_tool_result("recorded-call", {"temperature_c": 18})
+        await session.send_tool_result(
+            ToolResult("recorded-call", True, value={"temperature_c": 18})
+        )
         await session.interrupt()
     finally:
         await transport.close()

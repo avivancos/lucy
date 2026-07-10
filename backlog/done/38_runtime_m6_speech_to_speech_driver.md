@@ -4,7 +4,7 @@
 **Epic:** Voice runtime
 **Estimated effort:** ~10 h
 **Depends on:** 37
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -281,7 +281,7 @@ Read, in this order, before writing anything:
 
 ## Chips
 
-- [ ] **C1 - Realtime contracts.** Record `shasum src/lucy/session.py
+- [x] **C1 - Realtime contracts.** Record `shasum src/lucy/session.py
   src/lucy/tools.py src/lucy/mcp.py src/lucy/llm.py` in "Improvements
   noted" before coding. Write tests first in new
   `tests/test_realtime_driver.py`:
@@ -293,14 +293,14 @@ Read, in this order, before writing anything:
   `RealtimeHooks` in `src/lucy/drivers.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` -> all
   pass (>=2 tests).
-- [ ] **C2 - Transport directives.** Tests first:
+- [x] **C2 - Transport directives.** Tests first:
   `test_realtime_directives_round_trip_through_parse_event` and
   `test_realtime_directives_reject_extra_fields`. Implement
   `RealtimeConnect` and `RealtimeToolResult` plus `parse_event`
   registration in `src/lucy/transport/schema.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py
   tests/test_transport_schema.py -q` -> all pass (no schema regressions).
-- [ ] **C3 - Simulator transcripts and pacing.** Tests first:
+- [x] **C3 - Simulator transcripts and pacing.** Tests first:
   `test_simulator_emits_rising_user_partials_then_final_then_done` and
   `test_simulator_paces_events_via_manual_clock_without_wall_time`.
   Implement `ScriptedRealtimeTurn`, `ScriptedRealtimeToolCall`,
@@ -309,14 +309,14 @@ Read, in this order, before writing anything:
   `src/lucy/testing/__init__.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` -> all
   pass, total runtime < 1 s (proves no real sleeping).
-- [ ] **C4 - Simulator tool round and interrupt.** Tests first:
+- [x] **C4 - Simulator tool round and interrupt.** Tests first:
   `test_simulator_tool_call_waits_for_result_then_streams_followup` and
   `test_simulator_interrupt_stops_deltas_and_done_carries_partial_text`.
   Implement `send_tool_result`, `interrupt`, and `close` in
   `src/lucy/testing/realtime.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` -> all
   pass.
-- [ ] **C5 - RealtimeTurnDriver happy turn.** Tests first:
+- [x] **C5 - RealtimeTurnDriver happy turn.** Tests first:
   `test_run_turn_emits_no_tts_speak_and_one_terminal_report`,
   `test_report_llm_ms_is_voice_to_voice_on_manual_clock` (clock delta
   from `run_turn` start to `RealtimeAssistantDone`; report carries usage
@@ -327,7 +327,7 @@ Read, in this order, before writing anything:
   driver core (no tools, no hooks yet) in `src/lucy/drivers.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` -> all
   pass.
-- [ ] **C6 - Driver tool rounds via the real McpToolExecutor.** Tests
+- [x] **C6 - Driver tool rounds via the real McpToolExecutor.** Tests
   first: `test_realtime_tool_round_executes_via_mcp_executor_with_audit`
   (real `McpClient(LocalMcpCommandTransport(),
   allowed_tools=["crm.book_meeting"])`; result delivered to the session;
@@ -340,7 +340,7 @@ Read, in this order, before writing anything:
   Implement the tool round in `RealtimeTurnDriver`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` -> all
   pass.
-- [ ] **C7 - Barge-in mapping and hooks.** Tests first:
+- [x] **C7 - Barge-in mapping and hooks.** Tests first:
   `test_cancelling_run_turn_calls_session_interrupt_no_orphan_tasks`
   (cancel the consuming task mid-deltas; `session.interrupted` is True;
   no report yielded; `last_voiced_text` equals the deltas emitted before
@@ -351,7 +351,7 @@ Read, in this order, before writing anything:
   handling, `aclose`, and hook execution in `src/lucy/drivers.py`.
   Verify: `.venv/bin/python -m pytest tests/test_realtime_driver.py -q`
   -> all pass.
-- [ ] **C8 - select_driver and the spec field.** Tests first:
+- [x] **C8 - select_driver and the spec field.** Tests first:
   `test_select_driver_routes_by_realtime_capability`
   (`openai/gpt-realtime` -> REALTIME, `anthropic/claude-sonnet` ->
   CASCADED, `"local"` -> CASCADED, all against
@@ -364,7 +364,7 @@ Read, in this order, before writing anything:
   `llm_provider` to `VoiceSpec` in `src/lucy/specs.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py
   tests/test_specs.py -q` -> all pass (specs suite unbroken).
-- [ ] **C9 - Thinking-phase barge-in and interruption parity.** Tests
+- [x] **C9 - Thinking-phase barge-in and interruption parity.** Tests
   first: `test_gateway_simulator_fires_thinking_barge_in_without_playback`
   and `test_booking_interruption_parity_across_drivers`
   (`booking_interruption` through `ConversationHarness` on both drivers;
@@ -373,7 +373,7 @@ Read, in this order, before writing anything:
   in `src/lucy/transport/dev_gateway.py`. Verify:
   `.venv/bin/python -m pytest tests/test_realtime_driver.py
   tests/test_dev_gateway.py -q` -> all pass (gateway suite unbroken).
-- [ ] **C10 - Six-scenario parity gate.** Tests first:
+- [x] **C10 - Six-scenario parity gate.** Tests first:
   `test_eval_suite_green_on_both_drivers_with_identical_funnel_outcomes`
   (parametrized over all six `default_sales_booking_scenarios()`; both
   drivers pass; `actual_outcome` and `gates` equal per scenario) and
@@ -382,7 +382,7 @@ Read, in this order, before writing anything:
   Add the scripting helpers; adjust driver wiring only as needed.
   Verify: `.venv/bin/python -m pytest tests/test_realtime_driver.py -q`
   -> all pass (>=18 tests).
-- [ ] **C11 - Full suite + bookkeeping.** Run everything, confirm
+- [x] **C11 - Full suite + bookkeeping.** Run everything, confirm
   `shasum src/lucy/session.py src/lucy/tools.py src/lucy/mcp.py
   src/lucy/llm.py` matches the values recorded in C1, fill "Improvements
   noted", move this card to `done/`. Verify:
@@ -432,30 +432,30 @@ Read, in this order, before writing anything:
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` ->
+- [x] `.venv/bin/python -m pytest tests/test_realtime_driver.py -q` ->
       all pass (>=18 tests): all six golden scenarios produce identical
       funnel outcomes and identical tool audits on both drivers; realtime
       reports carry voice-to-voice `llm_ms` in the standard waterfall
       schema with `stt_ms`/`tts_ms` zero; barge-in maps to
       `RealtimeSession.interrupt`.
-- [ ] `.venv/bin/python -m pytest tests/test_realtime_driver.py
+- [x] `.venv/bin/python -m pytest tests/test_realtime_driver.py
       tests/test_cascaded_driver.py tests/test_realtime_tools.py
       tests/test_transport_schema.py tests/test_dev_gateway.py
       tests/test_specs.py -q` -> all pass (cascaded driver, tool
       executor, schema, gateway, and spec behavior unchanged).
-- [ ] `shasum src/lucy/session.py src/lucy/tools.py src/lucy/mcp.py
+- [x] `shasum src/lucy/session.py src/lucy/tools.py src/lucy/mcp.py
       src/lucy/llm.py` -> identical to the checksums recorded in C1
       (same session abstraction, reused unchanged).
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker"
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker"
       tests/test_realtime_driver.py src/lucy/testing/realtime.py` -> no
       matches.
-- [ ] `grep -rin "openai\|gemini\|deepgram\|elevenlabs"
+- [x] `grep -rin "openai\|gemini\|deepgram\|elevenlabs"
       src/lucy/drivers.py` -> no matches (capability routing, zero
       provider literals in driver code).
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon
       is available).
-- [ ] Post-task audit done; follow-up cards raised for anything noticed.
+- [x] Post-task audit done; follow-up cards raised for anything noticed.
 
 ## Failure protocol
 
@@ -466,7 +466,25 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- C1 protected-file SHA-1 baseline: `session.py`
+  `43043c457c64f4f651e02597d8c151bc11a3ca9d`, `tools.py`
+  `fbae3db4112b981da74d78a93ab4222e9712efc0`, `mcp.py`
+  `1014cfa025f381a36fcdcd065b3614e7cb53f9c4`, and `llm.py`
+  `6145db53bd181d48dea404bba554c4610ab1a7b3`.
+- The card 29 OpenAI adapter was aligned to the landed card 38 ABI:
+  `RealtimeSessionConfig`, the shared five-event union, and
+  `send_tool_result(ToolResult)`. Its authenticated replay fixture remains green.
+- Realtime tool-call IDs stay provider-session state and are paired FIFO with
+  typed tool results, so the shared `ToolResult` contract does not leak provider
+  identifiers into core.
+- The six golden scenarios execute through both driver implementations and use
+  the same `score_synthetic_call` rubric; MCP audit tuples and safe telemetry key
+  sets are identical for the booking tool path.
+- Card 51 remains the owner of the out-of-process audio bridge and measured
+  `transport_ms`. This card intentionally proves the Python control plane with
+  zero audio bytes and zero `TtsSpeak` directives.
+- Final evidence: 28 card tests, 78 focused regression tests, 443 root tests,
+  and 23 offline plugin tests passed in Docker; protected file hashes matched C1.
 
 ## Pending human testing
 

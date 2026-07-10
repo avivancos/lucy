@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from enum import Enum
 from typing import (
+    Awaitable,
     AsyncIterator,
     Callable,
     Dict,
@@ -24,11 +26,13 @@ from typing import (
     Sequence,
     TYPE_CHECKING,
     Union,
+    runtime_checkable,
 )
 
 from lucy.clock import Clock
 from lucy.llm import (
     LlmMessage,
+    LlmModelNotRegistered,
     LlmProvider,
     LlmRequest,
     StreamEnd,
@@ -38,7 +42,13 @@ from lucy.llm import (
     UsageReport,
     resolve_llm,
 )
-from lucy.providers import ModelRegistry
+from lucy.providers import (
+    LOCAL_PROVIDER_NAME,
+    Capability,
+    ModelInfo,
+    ModelRegistry,
+    parse_spec_string,
+)
 from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, LlmPricing
 from lucy.speech import MIN_FLUSH_CHARS, SentenceAssembler, TtsPlanner
@@ -49,6 +59,7 @@ from lucy.transport.schema import TtsSpeak
 
 if TYPE_CHECKING:
     from lucy.graph import CompiledAgentGraph
+    from lucy.specs import LucySpec
 
 
 @dataclass(frozen=True)
@@ -61,6 +72,69 @@ class TurnDriverReport:
 
 
 DriverEvent = Union[TtsSpeak, TurnDriverReport]
+
+
+@dataclass(frozen=True)
+class RealtimeSessionConfig:
+    provider: str
+    model: str
+    system_prompt: str
+    tools: Sequence[ToolDef] = ()
+    locale: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RealtimeUserTranscript:
+    text: str
+    final: bool
+
+
+@dataclass(frozen=True)
+class RealtimeAssistantDelta:
+    utterance_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class RealtimeAssistantDone:
+    utterance_id: str
+    full_text: str
+
+
+RealtimeEvent = Union[
+    RealtimeUserTranscript,
+    RealtimeAssistantDelta,
+    RealtimeAssistantDone,
+    ToolCallReady,
+    UsageReport,
+]
+
+
+@runtime_checkable
+class RealtimeSession(Protocol):
+    def events(self) -> AsyncIterator[RealtimeEvent]: ...
+
+    async def send_tool_result(self, result: ToolResult) -> None: ...
+
+    async def interrupt(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+@runtime_checkable
+class RealtimeProvider(Protocol):
+    async def open(self, config: RealtimeSessionConfig) -> RealtimeSession: ...
+
+
+@dataclass(frozen=True)
+class RealtimeHooks:
+    pre_turn: Sequence[Callable[[str], Awaitable[None]]] = ()
+    post_turn: Sequence[Callable[[TurnDriverReport], Awaitable[None]]] = ()
+
+
+class DriverKind(str, Enum):
+    CASCADED = "cascaded"
+    REALTIME = "realtime"
 
 
 class TurnDriver(Protocol):
@@ -235,6 +309,139 @@ class CascadedTurnDriver:
         return (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k + (
             usage.completion_tokens / 1000.0
         ) * self._pricing.completion_per_1k
+
+
+def resolve_realtime(registry: ModelRegistry, provider: str, model: str) -> ModelInfo:
+    info = registry.get(provider, model)
+    if info is None or Capability.REALTIME not in info.capabilities:
+        raise LlmModelNotRegistered(
+            "no realtime-capable model %r/%r in the registry" % (provider, model)
+        )
+    return info
+
+
+def select_driver(spec: "LucySpec", registry: ModelRegistry) -> DriverKind:
+    provider, model = parse_spec_string(spec.voice.llm_provider)
+    if provider == LOCAL_PROVIDER_NAME:
+        return DriverKind.CASCADED
+    assert model is not None
+    info = registry.get(provider, model)
+    if info is None:
+        raise LlmModelNotRegistered("model %s/%s is not registered" % (provider, model))
+    if Capability.REALTIME in info.capabilities:
+        return DriverKind.REALTIME
+    if Capability.LLM in info.capabilities:
+        return DriverKind.CASCADED
+    capabilities = ", ".join(capability.value for capability in info.capabilities)
+    raise LlmModelNotRegistered(
+        "model %s/%s has capabilities [%s], not llm or realtime"
+        % (provider, model, capabilities)
+    )
+
+
+class RealtimeTurnDriver:
+    def __init__(
+        self,
+        provider: RealtimeProvider,
+        config: RealtimeSessionConfig,
+        registry: ModelRegistry,
+        clock: Clock,
+        budgets: LatencyBudgets,
+        tool_executor: Optional[McpToolExecutor] = None,
+        tools: Sequence[ToolDef] = (),
+        hooks: RealtimeHooks = RealtimeHooks(),
+        pricing: Optional[LlmPricing] = None,
+    ) -> None:
+        resolve_realtime(registry, config.provider, config.model)
+        self._provider = provider
+        self._config = config
+        self._clock = clock
+        self._budgets = budgets
+        self._tool_executor = tool_executor
+        self._tools_by_name = {tool.name: tool for tool in tools}
+        self._hooks = hooks
+        self._pricing = pricing
+        self._session: Optional[RealtimeSession] = None
+        self.last_voiced_text = ""
+
+    async def _open(self) -> RealtimeSession:
+        if self._session is None:
+            self._session = await self._provider.open(self._config)
+        return self._session
+
+    async def run_turn(
+        self,
+        user_text: str,
+        history: Sequence[LlmMessage],
+        *,
+        turn_context: object | None = None,
+    ) -> AsyncIterator[DriverEvent]:
+        del history, turn_context
+        session = await self._open()
+        self.last_voiced_text = ""
+        usage: Optional[UsageReport] = None
+        assistant_done: Optional[RealtimeAssistantDone] = None
+        mcp_tools_ms = 0.0
+        rounds = 0
+        started = self._clock.monotonic()
+        for pre_hook in self._hooks.pre_turn:
+            await pre_hook(user_text)
+        try:
+            async for event in session.events():
+                if isinstance(event, RealtimeAssistantDelta):
+                    self.last_voiced_text += event.text
+                elif isinstance(event, UsageReport):
+                    usage = event
+                elif isinstance(event, ToolCallReady):
+                    rounds += 1
+                    tool = self._tools_by_name.get(event.name)
+                    if rounds > self._budgets.max_tool_rounds_per_turn:
+                        result = ToolResult(
+                            tool_key=event.name, ok=False, error_kind="budget"
+                        )
+                    elif tool is None or self._tool_executor is None:
+                        result = ToolResult(
+                            tool_key=event.name,
+                            ok=False,
+                            error_kind="unknown_tool",
+                        )
+                    else:
+                        result = await self._tool_executor.execute(
+                            tool, dict(event.arguments)
+                        )
+                        mcp_tools_ms += result.elapsed_ms
+                    await session.send_tool_result(result)
+                elif isinstance(event, RealtimeAssistantDone):
+                    assistant_done = event
+                    break
+        except asyncio.CancelledError:
+            await session.interrupt()
+            raise
+
+        if assistant_done is None:
+            raise RuntimeError("realtime session ended without assistant completion")
+        report = TurnDriverReport(
+            assistant_text=assistant_done.full_text,
+            llm_ms=(self._clock.monotonic() - started) * 1000.0,
+            usage=usage,
+            llm_cost=self._cost(usage),
+            mcp_tools_ms=mcp_tools_ms,
+        )
+        for post_hook in self._hooks.post_turn:
+            await post_hook(report)
+        yield report
+
+    def _cost(self, usage: Optional[UsageReport]) -> float:
+        if usage is None or self._pricing is None:
+            return 0.0
+        return (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k + (
+            usage.completion_tokens / 1000.0
+        ) * self._pricing.completion_per_1k
+
+    async def aclose(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
 
 class GraphTurnDriver:
