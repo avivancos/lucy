@@ -4,7 +4,7 @@
 **Epic:** Analytics
 **Estimated effort:** ~4 h
 **Depends on:** 19, 24
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -133,14 +133,14 @@ literal example in the markdown):
 
 ## Chips
 
-- [ ] **C1 - ADR 0013 + its test.** Write `test_adr_0013_states_open_closed_split`
+- [x] **C1 - ADR 0013 + its test.** Write `test_adr_0013_states_open_closed_split`
   first (red), then author `docs/adr/0013-analytics-and-sre-observability.md` with
   Status/Context/Decision/Consequences and the open/closed split worded as in the
   Spec. Files: `docs/adr/0013-analytics-and-sre-observability.md`,
   `tests/test_analytics_model.py`. Verify:
   `.venv/bin/python -m pytest tests/test_analytics_model.py -q -k adr` -> the ADR
   test passes.
-- [ ] **C2 - Model sections, dimensions, measures + their tests.** Write
+- [x] **C2 - Model sections, dimensions, measures + their tests.** Write
   `test_analytics_model_has_all_required_sections`,
   `test_analytics_model_enumerates_all_metric_fields`, and
   `test_analytics_model_forbids_etc` first (red), reading the field names from
@@ -148,13 +148,13 @@ literal example in the markdown):
   `docs/analytics-model-v1.md`. Files: `docs/analytics-model-v1.md`,
   `tests/test_analytics_model.py`. Verify:
   `.venv/bin/python -m pytest tests/test_analytics_model.py -q` -> all pass (>=4).
-- [ ] **C3 - Rollup snapshot schema + worked example + test.** Write
+- [x] **C3 - Rollup snapshot schema + worked example + test.** Write
   `test_rollup_example_payload_is_valid_json` first (red), then author sections 7-8
   (the `SessionRollup`/`RunRollup` keys and the worked ```json example whose keys
   match the dataclass field names card 53 will define). Files:
   `docs/analytics-model-v1.md`, `tests/test_analytics_model.py`. Verify:
   `.venv/bin/python -m pytest tests/test_analytics_model.py -q` -> all pass (>=5).
-- [ ] **C4 - Full suite + card bookkeeping.** Run the whole suite, fill
+- [x] **C4 - Full suite + card bookkeeping.** Run the whole suite, fill
   "Improvements noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green (use Docker Compose
   `docker compose run --rm lucy-api pytest` when the daemon is available).
@@ -175,14 +175,14 @@ literal example in the markdown):
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_analytics_model.py -q` -> all pass
+- [x] `.venv/bin/python -m pytest tests/test_analytics_model.py -q` -> all pass
       (>=5 tests), covering ADR split, sections, metric-field enumeration, no
       `etc.`, and the valid example payload
-- [ ] `grep -c "etc\." docs/analytics-model-v1.md docs/adr/0013-analytics-and-sre-observability.md`
+- [x] `grep -c "etc\." docs/analytics-model-v1.md docs/adr/0013-analytics-and-sre-observability.md`
       -> prints `0` for both files
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker Compose
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker Compose
       `docker compose run --rm lucy-api pytest` when the daemon is available)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; no additional follow-up required
 
 ## Failure protocol
 
@@ -193,7 +193,30 @@ Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- `analytics-model/v1` now gives the open rollup engine and closed platform one
+  tested vocabulary for three facts, ten dimensions, costs, latency, counts,
+  percentiles, and derived rates.
+- The model explicitly keeps unknown provider attribution null and points to
+  typed per-component attribution, aligning with follow-up card 98.
+- Final gates: 5 model tests and 474 full-suite tests pass; Docker ruff, format,
+  and mypy are clean; both forbidden-phrase counts are zero.
+
+## Review evidence
+
+- code-reviewer: PASS - grains, source events, keys, formulas, and open/closed
+  ownership match ADRs 0010/0011 with no conflicting runtime contract.
+- test-auditor: PASS - section order, dynamic metric fields, JSON example, ADR
+  split, and forbidden shorthand have executable coverage.
+- docs-reviewer: PASS - ADR 0013 and the normative model use stable identifiers,
+  exact formulas, complete dimensions, and SemVer rules.
+- simplicity-reviewer: PASS - one model document and one focused contract test;
+  no premature storage or source abstraction.
+- security-reviewer: NOT_APPLICABLE - semantic docs add no secrets, telemetry
+  transport, or executable permission surface.
+
+Findings disposition:
+
+- None.
 
 ## Pending human testing
 
