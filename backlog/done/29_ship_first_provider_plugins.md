@@ -4,7 +4,7 @@
 **Epic:** Providers
 **Estimated effort:** ~12 h
 **Depends on:** 28
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -266,7 +266,7 @@ packages/lucy-<provider>/
 
 ## Chips
 
-- [ ] **C1 - STT/TTS contract suites on simulators.** Write
+- [x] **C1 - STT/TTS contract suites on simulators.** Write
   `tests/test_provider_contracts.py` first with binding classes
   `TestLocalSttSimulatorContract(SttContractSuite)` and
   `TestLocalTtsSimulatorContract(TtsContractSuite)` (stalled hooks use
@@ -274,14 +274,14 @@ packages/lucy-<provider>/
   implement `src/lucy/testing/contracts.py` (STT + TTS suites). Verify:
   `.venv/bin/python -m pytest tests/test_provider_contracts.py -q` -> 8
   passed.
-- [ ] **C2 - LLM contract suite on the LLM simulator.** Requires
+- [x] **C2 - LLM contract suite on the LLM simulator.** Requires
   `src/lucy/llm.py` (card 33); if missing, stop per Failure protocol. Add
   `TestLocalLlmSimulatorContract(LlmContractSuite)` to
   `tests/test_provider_contracts.py` first, then add `LlmContractSuite` to
   `src/lucy/testing/contracts.py`. Verify:
   `.venv/bin/python -m pytest tests/test_provider_contracts.py -q` -> 13
   passed.
-- [ ] **C3 - Fixture replay engine.** Tests first in
+- [x] **C3 - Fixture replay engine.** Tests first in
   `tests/test_fixture_replay.py`:
   `test_replay_yields_received_frames_in_order`,
   `test_sent_frame_mismatch_raises_fixture_mismatch`,
@@ -290,7 +290,7 @@ packages/lucy-<provider>/
   echo-protocol sample is allowed ONLY here because it tests the replay
   engine, not a provider. Implement `src/lucy/testing/replay.py`. Verify:
   `.venv/bin/python -m pytest tests/test_fixture_replay.py -q` -> >=3 pass.
-- [ ] **C4 - Fixture recorder with scrubbing.** Tests first in
+- [x] **C4 - Fixture recorder with scrubbing.** Tests first in
   `tests/test_fixture_recorder.py`:
   `test_recorder_scrubs_credentials_from_frames`,
   `test_recorder_masks_volatile_fields`,
@@ -300,7 +300,7 @@ packages/lucy-<provider>/
   `src/lucy/testing/record.py` (writer functions + `__main__` CLI). Verify:
   `.venv/bin/python -m pytest tests/test_fixture_recorder.py -q` -> >=3
   pass.
-- [ ] **C5 - ElevenLabs package scaffold.** Tests first in
+- [x] **C5 - ElevenLabs package scaffold.** Tests first in
   `packages/lucy-elevenlabs/tests/test_catalog.py`:
   `test_plugin_discovered_with_tts_catalog` (via `load_plugins()`),
   `test_factory_without_key_warns_and_returns_simulator`
@@ -310,7 +310,7 @@ packages/lucy-<provider>/
   `live` marker + `addopts` to root `pyproject.toml`; run `uv sync`.
   Verify: `.venv/bin/python -m pytest packages/lucy-elevenlabs/tests -q`
   -> all pass.
-- [ ] **C6 - ElevenLabs fixture + TTS adapter.** Requires real
+- [x] **C6 - ElevenLabs fixture + TTS adapter.** Requires real
   `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` exported; if absent, stop
   per Failure protocol. Write
   `packages/lucy-elevenlabs/tests/test_contract_tts.py` first:
@@ -322,7 +322,7 @@ packages/lucy-<provider>/
   `tests/fixtures/utterance_16k.wav`, implement `lucy_elevenlabs/tts.py`.
   Verify: `env -u ELEVENLABS_API_KEY .venv/bin/python -m pytest
   packages/lucy-elevenlabs/tests -q` -> all non-live pass, no network.
-- [ ] **C7 - Deepgram package scaffold.** Tests first in
+- [x] **C7 - Deepgram package scaffold.** Tests first in
   `packages/lucy-deepgram/tests/test_catalog.py`:
   `test_plugin_discovered_with_stt_catalog`,
   `test_factory_without_key_warns_and_returns_simulator` (match
@@ -330,7 +330,7 @@ packages/lucy-<provider>/
   `src/lucy_deepgram/{__init__.py,catalog.py,settings.py}`; run `uv sync`.
   Verify: `.venv/bin/python -m pytest packages/lucy-deepgram/tests -q` ->
   all pass.
-- [ ] **C8 - Deepgram fixture + STT adapter.** Requires real
+- [x] **C8 - Deepgram fixture + STT adapter.** Requires real
   `DEEPGRAM_API_KEY`; if absent, stop per Failure protocol. Copy
   `utterance_16k.wav` from C6 into `packages/lucy-deepgram/tests/fixtures/`.
   Write `packages/lucy-deepgram/tests/test_contract_stt.py` first:
@@ -342,7 +342,7 @@ packages/lucy-<provider>/
   `lucy_deepgram/stt.py`. Verify: `env -u DEEPGRAM_API_KEY
   .venv/bin/python -m pytest packages/lucy-deepgram/tests -q` -> all
   non-live pass, no network.
-- [ ] **C9 - OpenAI package scaffold + catalog merge.** Tests first:
+- [x] **C9 - OpenAI package scaffold + catalog merge.** Tests first:
   `packages/lucy-openai/tests/test_catalog.py::
   test_plugin_discovered_with_llm_and_realtime_catalog` and
   `tests/test_plugin_catalog_merge.py::
@@ -352,7 +352,7 @@ packages/lucy-<provider>/
   `src/lucy_openai/{__init__.py,catalog.py,settings.py}`; run `uv sync`.
   Verify: `.venv/bin/python -m pytest packages/lucy-openai/tests
   tests/test_plugin_catalog_merge.py -q` -> all pass.
-- [ ] **C10 - OpenAI LLM streaming adapter.** Requires real
+- [x] **C10 - OpenAI LLM streaming adapter.** Requires real
   `OPENAI_API_KEY`; if absent, stop per Failure protocol. Write
   `packages/lucy-openai/tests/test_contract_llm.py` first:
   `TestOpenAiLlmContract(LlmContractSuite)` on `ReplayTransport` plus
@@ -362,7 +362,7 @@ packages/lucy-<provider>/
   `llm_factory` (keyless fallback to `LocalLlmSimulator` with warning).
   Verify: `env -u OPENAI_API_KEY .venv/bin/python -m pytest
   packages/lucy-openai/tests -q` -> all non-live pass, no network.
-- [ ] **C11 - OpenAI realtime adapter.** Requires real `OPENAI_API_KEY`;
+- [x] **C11 - OpenAI realtime adapter.** Requires real `OPENAI_API_KEY`;
   if absent, stop per Failure protocol. Tests first in
   `packages/lucy-openai/tests/test_realtime_adapter.py`:
   `test_realtime_session_streams_transcript_deltas`,
@@ -373,7 +373,7 @@ packages/lucy-<provider>/
   card-38 session surface, register `realtime_factory`. Verify:
   `env -u OPENAI_API_KEY .venv/bin/python -m pytest
   packages/lucy-openai/tests -q` -> all non-live pass, no network.
-- [ ] **C12 - Quickstart with plugin spec strings.** Test first in
+- [x] **C12 - Quickstart with plugin spec strings.** Test first in
   `tests/test_quickstart_provider_specs.py`:
   `test_quickstart_falls_back_to_simulators_without_keys` - run
   `examples/quickstart_voice_agent.py` via `subprocess.run` with
@@ -384,7 +384,7 @@ packages/lucy-<provider>/
   the two env vars (default `"local"`). Verify:
   `.venv/bin/python -m pytest tests/test_quickstart_provider_specs.py -q`
   -> all pass.
-- [ ] **C13 - Full suite + bookkeeping.** Run the root suite, the three
+- [x] **C13 - Full suite + bookkeeping.** Run the root suite, the three
   package suites without keys, the fixture-secret grep, and the three
   package builds (`uv build --package lucy-deepgram`, then
   `lucy-elevenlabs`, then `lucy-openai`); fill "Improvements noted"; move
@@ -429,36 +429,36 @@ packages/lucy-<provider>/
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_provider_contracts.py
+- [x] `.venv/bin/python -m pytest tests/test_provider_contracts.py
       tests/test_fixture_replay.py tests/test_fixture_recorder.py
       tests/test_plugin_catalog_merge.py
       tests/test_quickstart_provider_specs.py -q` -> all pass
-- [ ] `env -u DEEPGRAM_API_KEY -u ELEVENLABS_API_KEY -u OPENAI_API_KEY
+- [x] `env -u DEEPGRAM_API_KEY -u ELEVENLABS_API_KEY -u OPENAI_API_KEY
       .venv/bin/python -m pytest packages/lucy-deepgram/tests
       packages/lucy-elevenlabs/tests packages/lucy-openai/tests -q` -> all
       pass with zero network access (live tests deselected by default)
-- [ ] With the three provider keys exported: `.venv/bin/python -m pytest
+- [x] With the three provider keys exported: `.venv/bin/python -m pytest
       packages/lucy-deepgram/tests packages/lucy-elevenlabs/tests
       packages/lucy-openai/tests -m live -q` -> all live tests pass against
       the real sandboxes (manual run)
-- [ ] `env -u DEEPGRAM_API_KEY -u ELEVENLABS_API_KEY
+- [x] `env -u DEEPGRAM_API_KEY -u ELEVENLABS_API_KEY
       LUCY_QUICKSTART_STT_SPEC=deepgram/nova-3
       LUCY_QUICKSTART_TTS_SPEC=elevenlabs/flash-v2.5 .venv/bin/python
       examples/quickstart_voice_agent.py` -> exit 0, transcript printed,
       warnings name both missing keys (simulator fallback path)
-- [ ] Same quickstart command with real keys exported -> real provider
+- [x] Same quickstart command with real keys exported -> real provider
       events end-to-end (manual run)
-- [ ] `grep -rinE "(api[-_]?key|authorization|bearer)"
+- [x] `grep -rinE "(api[-_]?key|authorization|bearer)"
       packages/lucy-deepgram/tests/fixtures
       packages/lucy-elevenlabs/tests/fixtures
       packages/lucy-openai/tests/fixtures` -> no matches
-- [ ] `uv build --package lucy-deepgram && uv build --package
+- [x] `uv build --package lucy-deepgram && uv build --package
       lucy-elevenlabs && uv build --package lucy-openai` -> three wheels
       built (independently releasable)
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon is
       available)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
 
 ## Failure protocol
 
@@ -470,7 +470,31 @@ fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- The landed LLM wire contract terminates malformed streams with
+  `StreamEnd(finish_reason="error")`; the reusable LLM contract suite asserts
+  that behavior instead of introducing a new exception ABI.
+- Empty provider key environment variables are treated as missing credentials;
+  the ElevenLabs factory now falls back safely for both unset and empty values.
+- Exact plugin catalog rows may replace identical core seed rows; divergent or
+  foreign duplicates still fail with `ModelCatalogConflictError`.
+- Pytest now uses importlib mode so identically named package tests can run in a
+  single workspace invocation without module collisions.
+- The Docker development image installs all three workspace plugins in editable
+  mode; this keeps clean Compose runs independent of local build metadata.
+- Credential fields are removed before fixture persistence and replay comparison,
+  including both ElevenLabs spellings (`xi-api-key` and `xi_api_key`).
+- Deepgram frames oversized caller chunks according to typed `frame_bytes`
+  settings, so SDK callers do not need provider-specific audio framing.
+- OpenAI Realtime fixtures contain only control-plane transcript, tool, usage,
+  and cancellation frames; audio delta events are suppressed before recording.
+- Real provider evidence on 2026-07-10: 13 live contract tests passed; the
+  quickstart completed Deepgram STT -> Lucy graph -> ElevenLabs TTS using the
+  recorded WAV plus `LUCY_QUICKSTART_STT_DEADLINE_MS=10000`; all three provider
+  fixtures were generated from authenticated sessions with keys loaded only into
+  process memory.
+- The package builds warn that provider-specific READMEs are absent. Card 93
+  owns launch-base/package hygiene before publication; wheel creation itself is
+  green for all three packages.
 
 ## Pending human testing
 

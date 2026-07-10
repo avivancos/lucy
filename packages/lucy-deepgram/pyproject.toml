@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lucy-deepgram"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+  "lucy",
+  "pydantic-settings>=2.2.1",
+  "websockets>=13.0",
+]
+
+[project.entry-points."lucy.plugins"]
+deepgram = "lucy_deepgram:PLUGIN"
+
+[tool.setuptools.packages.find]
+where = ["src"]

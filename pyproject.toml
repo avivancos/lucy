@@ -45,6 +45,10 @@ members = ["packages/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--import-mode=importlib -m 'not live'"
+markers = [
+  "live: hits real provider endpoints; requires API keys",
+]
 
 [tool.ruff]
 line-length = 88

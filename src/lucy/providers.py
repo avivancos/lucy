@@ -315,16 +315,20 @@ def default_model_registry(
         ],
     )
     merged = list(core.models)
-    seen = {_model_key(model) for model in merged}
+    positions = {_model_key(model): index for index, model in enumerate(merged)}
     conflicts = set()
     for plugin in plugins:
         for model in plugin.catalog:
             key = _model_key(model)
-            if key in seen:
+            existing_index = positions.get(key)
+            if existing_index is not None:
+                if plugin.name == model.provider and merged[existing_index] == model:
+                    merged[existing_index] = model
+                    continue
                 conflicts.add(key)
-            else:
-                seen.add(key)
-                merged.append(model)
+                continue
+            positions[key] = len(merged)
+            merged.append(model)
     if conflicts:
         raise ModelCatalogConflictError(
             "duplicate model catalog entries: %s"

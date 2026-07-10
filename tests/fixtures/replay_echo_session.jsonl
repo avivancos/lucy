@@ -1,0 +1,3 @@
+{"direction":"sent","at_ms":0,"payload":{"type":"echo","text":"hello","request_id":"recorded-1"}}
+{"direction":"received","at_ms":5,"payload":{"type":"echo.result","text":"hello","request_id":"recorded-2"}}
+{"direction":"received","at_ms":8,"payload":{"type":"done"}}

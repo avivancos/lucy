@@ -9,7 +9,11 @@ COPY packages ./packages
 
 # Dev extras are the sanctioned Docker path for tests, lint, and type checks.
 RUN pip install --no-cache-dir -e ".[dev]"
-RUN pip install --no-cache-dir -e packages/lucy-fixture-plugin
+RUN pip install --no-cache-dir \
+    -e packages/lucy-fixture-plugin \
+    -e packages/lucy-deepgram \
+    -e packages/lucy-elevenlabs \
+    -e packages/lucy-openai
 
 EXPOSE 8000
 
