@@ -16,7 +16,7 @@ order unless the dependency notes say a sprint can start early.
 | S6 Provider ecosystem | Providers | 28, 29, 38, 51, 68 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers; routed LLM fallback spans are observable |
 | S7 Cloud observability seam | Platform | 30, 47*, 48*, 72, 73 | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard; run identity, tags, and blob presign are wired |
 | S8 Launch | Launch | 46, 49, 50, 93 | Public repo installable: `pip install` + quickstart from scratch on a clean machine; launch-base hygiene removed stale API shims |
-| S9 Analytics & SRE observability | Platform/Runtime | 52, 53, 54, 55, 56, 57, 66, 67, 94 | Local run serves an analytics-model-v1 rollup at `/analytics`, Grafana renders RED/USE metrics, and the SDK emits full voice costs plus RAG inspection spans with local budget enforcement |
+| S9 Analytics & SRE observability | Platform/Runtime | 52, 53, 54, 55, 56, 57, 66, 67, 94, 98 | Local run serves an analytics-model-v1 rollup at `/analytics`, Grafana renders RED/USE metrics, and the SDK emits full voice costs plus provider/RAG attribution with local budget enforcement |
 | S10 Agent operations | Process | 61, 62, 63, 65 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image; clean API builds keep the Docker context lean |
 | S11 Platform feed (SDK) | Runtime/Observability | 69, 70, 71 | A simulated call records dual-leg WAVs through LocalGatewaySimulator to a local blob server; `audio_ref` + `cost` + tagged events land in JSONL; the session resumes from Postgres after a process restart |
 | S12 Platform core | Platform | 74*, 75*, 76* | Compose brings up platform Postgres and MinIO; a key is minted; replayed fixtures land in Postgres; a second project's key proves tenant isolation |
@@ -50,9 +50,11 @@ on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
   card 79.
 - S8 is last and gates on everything shipped in S1-S7 that the launch story
   demos; card 93 closes stale runtime shims before the public ABI freezes.
-- S9 open cards (52-57, 66-67) need S1 (the `lucy.observe` seam, cards 24/25)
+- S9 open cards (52-57, 66-67, 98) need S1 (the `lucy.observe` seam, cards 24/25)
   and can run before the parked telephony lane. Platform cards 58*-60* moved to
   S14 and need card 52 plus the S12/S13 platform substrate.
+- Card 98 follows card 66 and adds per-component provider attribution to cost
+  events so platform provider spend never guesses across cascaded STT/LLM/TTS.
 - S10 is process tooling: it can run at any time, gates nothing in S2-S8, and
   card 62 depends on card 61.
 - S11 feeds the platform from the SDK and should run 69 -> 70 -> 71 after card
