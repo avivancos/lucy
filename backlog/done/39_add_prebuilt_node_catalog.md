@@ -4,7 +4,7 @@
 **Epic:** SDK surface
 **Estimated effort:** ~12 h
 **Depends on:** 37
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -265,7 +265,7 @@ harness scenario proving it end to end:
 
 ## Chips
 
-- [ ] **C1 - Node base contract.** Write `tests/test_nodes_base.py` first:
+- [x] **C1 - Node base contract.** Write `tests/test_nodes_base.py` first:
   `test_node_config_rejects_unknown_fields`,
   `test_as_graph_node_maps_deadline_retries_and_fallback`,
   `test_node_deadline_timeout_triggers_fallback_under_executor` (handler
@@ -274,7 +274,7 @@ harness scenario proving it end to end:
   `context.results`). Implement `src/lucy/nodes/{__init__.py,base.py}`.
   Verify: `.venv/bin/python -m pytest tests/test_nodes_base.py -q` -> all
   pass (>=3 tests).
-- [ ] **C2 - Perception family.** Tests first in
+- [x] **C2 - Perception family.** Tests first in
   `tests/test_nodes_perception.py`:
   `test_context_synthesis_falls_back_to_retrieval_only_on_deadline`,
   `test_slot_filler_merges_slots_and_speaks_confirmation`,
@@ -285,7 +285,7 @@ harness scenario proving it end to end:
   `LocalLlmSimulator`; RAG with `InMemoryRagIndex`). Verify:
   `.venv/bin/python -m pytest tests/test_nodes_perception.py -q` -> all
   pass (>=5 tests).
-- [ ] **C3 - Decision family.** Tests first in
+- [x] **C3 - Decision family.** Tests first in
   `tests/test_nodes_decision.py`:
   `test_intent_router_rejects_model_without_low_latency_flag`,
   `test_intent_router_label_drives_conditional_edge`,
@@ -294,7 +294,7 @@ harness scenario proving it end to end:
   `src/lucy/nodes/decision.py`. Verify:
   `.venv/bin/python -m pytest tests/test_nodes_decision.py -q` -> all pass
   (>=4 tests).
-- [ ] **C4 - Action family.** Tests first in `tests/test_nodes_action.py`:
+- [x] **C4 - Action family.** Tests first in `tests/test_nodes_action.py`:
   `test_llm_node_streams_clauses_into_tts_speak_directives`,
   `test_mcp_tool_node_appends_audited_result_to_state` (assert one
   `allowed=True` `McpAuditEvent` in `client.audit_log`),
@@ -304,7 +304,7 @@ harness scenario proving it end to end:
   `src/lucy/nodes/action.py`. Verify:
   `.venv/bin/python -m pytest tests/test_nodes_action.py -q` -> all pass
   (>=4 tests).
-- [ ] **C5 - Additive telephony schema messages.** Tests first in
+- [x] **C5 - Additive telephony schema messages.** Tests first in
   `tests/test_nodes_telephony.py`:
   `test_dial_hold_amd_round_trip_through_parse_event`,
   `test_unknown_type_still_rejected_after_additions`. Add `Dial`, `Hold`,
@@ -312,7 +312,7 @@ harness scenario proving it end to end:
   `.venv/bin/python -m pytest tests/test_nodes_telephony.py
   tests/test_transport_schema.py -q` -> all pass; card 32 schema tests
   untouched and green.
-- [ ] **C6 - Telephony node family.** Tests first in
+- [x] **C6 - Telephony node family.** Tests first in
   `tests/test_nodes_telephony.py`:
   `test_transfer_node_emits_transfer_directive`,
   `test_dtmf_menu_routes_digit_and_returns_timeout_after_retries`
@@ -326,7 +326,7 @@ harness scenario proving it end to end:
   `AmdResult` steps, `simulator.directives` capture). Verify:
   `.venv/bin/python -m pytest tests/test_nodes_telephony.py -q` -> all
   pass (>=8 tests).
-- [ ] **C7 - Post-call family.** Tests first in
+- [x] **C7 - Post-call family.** Tests first in
   `tests/test_nodes_postcall.py`:
   `test_summary_node_writes_summary_after_session_end`,
   `test_crm_sync_pushes_crm_ready_payload_via_mcp_audited`,
@@ -336,7 +336,7 @@ harness scenario proving it end to end:
   after `SessionEnded`, never inside a turn. Verify:
   `.venv/bin/python -m pytest tests/test_nodes_postcall.py -q` -> all
   pass (>=4 tests).
-- [ ] **C8 - Prebuilt booking_agent.** Test first in
+- [x] **C8 - Prebuilt booking_agent.** Test first in
   `tests/test_prebuilt_graphs.py`:
   `test_booking_agent_passes_all_six_golden_scenarios` - iterate
   `default_sales_booking_scenarios()` through `ConversationHarness` with
@@ -346,7 +346,7 @@ harness scenario proving it end to end:
   `.venv/bin/python -m pytest
   tests/test_prebuilt_graphs.py::test_booking_agent_passes_all_six_golden_scenarios
   -q` -> passes.
-- [ ] **C9 - Prebuilt lead_qualifier.** Test first in
+- [x] **C9 - Prebuilt lead_qualifier.** Test first in
   `tests/test_prebuilt_graphs.py`:
   `test_lead_qualifier_fills_slots_and_ends_with_disposition` (harness
   scenario: qualification slots filled, `FunnelEvent` emitted, one
@@ -354,21 +354,21 @@ harness scenario proving it end to end:
   `lead_qualifier()`. Verify:
   `.venv/bin/python -m pytest tests/test_prebuilt_graphs.py -q` -> all
   pass.
-- [ ] **C10 - Prebuilt receptionist.** Tests first in
+- [x] **C10 - Prebuilt receptionist.** Tests first in
   `tests/test_prebuilt_graphs.py`:
   `test_receptionist_routes_intent_to_transfer_directive`,
   `test_receptionist_falls_back_to_dtmf_menu_on_low_confidence`.
   Implement `receptionist()`. Verify:
   `.venv/bin/python -m pytest tests/test_prebuilt_graphs.py -q` -> all
   pass.
-- [ ] **C11 - Prebuilt survey_agent.** Test first in
+- [x] **C11 - Prebuilt survey_agent.** Test first in
   `tests/test_prebuilt_graphs.py`:
   `test_survey_agent_collects_answers_and_writes_summary` (configured
   question list spoken in order via `SayNode`, answers land in slots,
   post-call summary present). Implement `survey_agent()`. Verify:
   `.venv/bin/python -m pytest tests/test_prebuilt_graphs.py -q` -> all
   pass (>=5 tests).
-- [ ] **C12 - Full suite + bookkeeping.** Run everything, fill
+- [x] **C12 - Full suite + bookkeeping.** Run everything, fill
   "Improvements noted", move this card to `done/`. Verify:
   `.venv/bin/python -m pytest -q` -> full suite green.
 
@@ -406,28 +406,28 @@ harness scenario proving it end to end:
 
 ## Definition of Done
 
-- [ ] `.venv/bin/python -m pytest tests/test_nodes_base.py
+- [x] `.venv/bin/python -m pytest tests/test_nodes_base.py
       tests/test_nodes_perception.py tests/test_nodes_decision.py
       tests/test_nodes_action.py tests/test_nodes_telephony.py
       tests/test_nodes_postcall.py -q` -> all pass; every node family
       verified under the executor with deadline + fallback
       (`test_node_deadline_timeout_triggers_fallback_under_executor`).
-- [ ] `.venv/bin/python -m pytest tests/test_prebuilt_graphs.py -q` -> all
+- [x] `.venv/bin/python -m pytest tests/test_prebuilt_graphs.py -q` -> all
       pass, including
       `test_booking_agent_passes_all_six_golden_scenarios`.
-- [ ] `.venv/bin/python -m pytest tests/test_nodes_telephony.py
+- [x] `.venv/bin/python -m pytest tests/test_nodes_telephony.py
       tests/test_transport_schema.py -q` -> all pass (telephony nodes emit
       the correct control-channel directives; card 32 schema models
       unchanged).
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_nodes_base.py
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker" tests/test_nodes_base.py
       tests/test_nodes_perception.py tests/test_nodes_decision.py
       tests/test_nodes_action.py tests/test_nodes_telephony.py
       tests/test_nodes_postcall.py tests/test_prebuilt_graphs.py` -> no
       matches.
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon is
       available).
-- [ ] Post-task audit done; follow-up cards raised for anything noticed.
+- [x] Post-task audit done; follow-up cards raised for anything noticed.
 
 ## Failure protocol
 
@@ -438,7 +438,34 @@ report. Partial honest work beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
+- The landed AgentGraph contract passes `ConversationState` separately from
+  `TurnContext`; prebuilt nodes therefore use `(state, ctx) -> StateUpdate`.
+  `as_graph_node` retains standalone `GraphExecutor` compatibility through a
+  named payload key, avoiding hidden mutable state and parallel-update races.
+- `ContextSynthesisConfig.max_chunks` and intent confidence bounds were found
+  during review, covered by negative regressions, and fixed before closure.
+- `GraphTurnDriver` currently forwards only `TtsSpeak` from graph emissions;
+  card 97 now owns typed propagation of all downstream directives before S5.
+
+## Review evidence
+
+- code-reviewer: PASS - full diff reviewed; no unresolved P0/P1 findings.
+- test-auditor: PASS - 368 Docker tests pass; focused node/prebuilt negative
+  paths and no-mocks scan pass.
+- docs-reviewer: PASS - public contracts are documented in typed APIs and the
+  executable card; launch guides remain owned by card 49.
+- simplicity-reviewer: PASS - node families share one adapter and graph
+  factories compose the public nodes without a second runtime.
+- security-reviewer: PASS - MCP remains permission-audited, grounded context is
+  delimited, no secrets/audio cross the control plane, and post-call execution
+  is explicitly gated.
+
+Findings disposition:
+
+- [P2][code-reviewer-001] `max_chunks` did not limit synthesis input - fixed.
+- [P2][test-auditor-001] intent confidence accepted values outside 0..1 - fixed.
+- [P2][code-reviewer-002] non-TTS graph directives stop at `GraphTurnDriver` -
+  follow-up card 97.
 
 ## Pending human testing
 

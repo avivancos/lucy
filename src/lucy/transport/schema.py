@@ -65,6 +65,11 @@ class Dtmf(_Strict):
     digit: str
 
 
+class AmdResult(_Strict):
+    outcome: Literal["human", "machine", "unknown"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class TtsPlayback(_Strict):
     utterance_id: str
     state: Literal["started", "mark", "finished", "flushed"]
@@ -122,6 +127,17 @@ class Transfer(_Strict):
     target: str
 
 
+class Dial(_Strict):
+    target: str
+    caller_id: str
+    timeout_ms: int
+
+
+class Hold(_Strict):
+    state: Literal["hold", "resume"]
+    music: bool = False
+
+
 class SessionEnd(_Strict):
     reason: str
 
@@ -133,6 +149,7 @@ UPSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "stt.partial": SttPartial,
     "stt.final": SttFinal,
     "dtmf": Dtmf,
+    "amd.result": AmdResult,
     "tts.playback": TtsPlayback,
     "barge_in": BargeIn,
     "transport.metrics": TransportMetrics,
@@ -146,6 +163,8 @@ DOWNSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "tts.stream_end": TtsStreamEnd,
     "dtmf.send": DtmfSend,
     "transfer": Transfer,
+    "dial": Dial,
+    "hold": Hold,
     "session.end": SessionEnd,
 }
 

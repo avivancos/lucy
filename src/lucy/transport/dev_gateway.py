@@ -18,8 +18,10 @@ from lucy.clock import Clock, MonotonicClock
 from lucy.evals import SyntheticCallScenario
 from lucy.settings import LatencyBudgets
 from lucy.transport.schema import (
+    AmdResult,
     BargeIn,
     ControlEvent,
+    Dtmf,
     Envelope,
     SessionEnded,
     SessionStarted,
@@ -51,6 +53,8 @@ class LocalGatewaySimulator:
         budgets: LatencyBudgets | None = None,
         barge_in_turns: Iterable[int] = (),
         vad_interrupt_turns: Iterable[int] = (),
+        dtmf_steps: Iterable[str] = (),
+        amd_steps: Iterable[AmdResult] = (),
     ) -> None:
         self.scenario = scenario
         self.clock = clock or MonotonicClock()
@@ -61,8 +65,11 @@ class LocalGatewaySimulator:
         # vs. while it is still THINKING (VadSpeechStart, before any playback).
         self.barge_in_turns: FrozenSet[int] = frozenset(barge_in_turns)
         self.vad_interrupt_turns: FrozenSet[int] = frozenset(vad_interrupt_turns)
+        self.dtmf_steps = tuple(dtmf_steps)
+        self.amd_steps = tuple(amd_steps)
         self._inbound: "asyncio.Queue[Tuple[Envelope, object]]" = asyncio.Queue()
         self.sent: list[ControlEvent] = []
+        self.directives: list[object] = []
         self._seq = 0
         # Virtual time seeded from the injected clock; it then advances by budget
         # increments per event (no wall-clock sleeping, so tests stay deterministic).
@@ -72,6 +79,7 @@ class LocalGatewaySimulator:
 
     async def send(self, envelope: Envelope, payload: object) -> None:
         self.sent.append(ControlEvent(envelope, payload))
+        self.directives.append(payload)
         await self._inbound.put((envelope, payload))
 
     # -- upstream (gateway -> session) --------------------------------------
@@ -92,6 +100,10 @@ class LocalGatewaySimulator:
             "session.started",
             SessionStarted(transport="sim", caller="+10000000000", codecs=["pcmu"]),
         )
+        for digit in self.dtmf_steps:
+            yield self._emit("dtmf", Dtmf(digit=digit))
+        for result in self.amd_steps:
+            yield self._emit("amd.result", result)
 
         caller_turns = [t for t in self.scenario.turns if t.speaker == "caller"]
         for index, turn in enumerate(caller_turns):

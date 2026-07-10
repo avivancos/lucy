@@ -12,7 +12,7 @@ order unless the dependency notes say a sprint can start early.
 | S2 Voice runtime core | Runtime | 32, 33, 34, 64 | Scripted call end-to-end: streaming LLM, mid-call MCP tool with filler, real per-turn LatencyWaterfall |
 | S3 Conversational correctness | Runtime | 35, 36, 31 | booking_interruption eval green; <800 ms p50 budget asserted with ManualClock; traces visible in `lucy dev` viewer |
 | S4 Graph and state | Runtime | 37, 39, 95, 96 | Prebuilt `booking_agent()` passes all six golden scenarios; grounded RAG context reaches the LLM; interrupted heard text survives in graph memory; kill/resume mid-call works |
-| S5 Native telephony | Telephony | 40, 41, 42, 43, 44, 45 | Real call softphone -> Asterisk -> Lucy locally; real PSTN call via CPaaS with a Spanish DID |
+| S5 Native telephony | Telephony | 97, 40, 41, 42, 43, 44, 45 | Real call softphone -> Asterisk -> Lucy locally; real PSTN call via CPaaS with a Spanish DID |
 | S6 Provider ecosystem | Providers | 28, 29, 38, 51, 68 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers; routed LLM fallback spans are observable |
 | S7 Cloud observability seam | Platform | 30, 47*, 48*, 72, 73 | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard; run identity, tags, and blob presign are wired |
 | S8 Launch | Launch | 46, 49, 50, 93 | Public repo installable: `pip install` + quickstart from scratch on a clean machine; launch-base hygiene removed stale API shims |
@@ -38,9 +38,10 @@ on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
 - Card 96 makes the live session's heard transcript authoritative for graph
   memory after cancellation or playback interruption. Card 69 persists that
   reconciled state across process and telephony-session boundaries.
-- S5 is intentionally parked until the S13 platform demo, then runs 40 -> 41
-  -> 42, with 43/44/45 scoped from the S5 findings. The transports still adapt
-  the control-channel schema defined in S2.
+- S5 is intentionally parked until the S13 platform demo, then runs 97 -> 40
+  -> 41 -> 42, with 43/44/45 scoped from the S5 findings. Card 97 closes the
+  graph-to-gateway directive path before real transports depend on it. The
+  transports still adapt the control-channel schema defined in S2.
 - S6 needs S4 (plugins resolve into the full runtime). Card 51 must wait until
   card 70 lands so Rust/Python golden control-channel fixtures include recording
   messages.
