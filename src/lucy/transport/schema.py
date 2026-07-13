@@ -10,9 +10,9 @@ build against.
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, NamedTuple, Optional, Type
+from typing import Annotated, Dict, List, Literal, NamedTuple, Optional, Type
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 
 class _Strict(BaseModel):
@@ -95,29 +95,54 @@ class SessionEnded(_Strict):
 
 RECORDING_FEATURE = "recording"
 RecordingLeg = Literal["caller", "agent", "mixed"]
+OPAQUE_RECORDING_REF_PATTERN = r"^[A-Za-z0-9._:-]+$"
+OPAQUE_RECORDING_REF_MAX_LENGTH = 128
+PHONE_LIKE_RECORDING_REF_MIN_DIGITS = 8
+
+
+def validate_opaque_recording_ref(value: str) -> str:
+    if sum(character.isdigit() for character in value) >= (
+        PHONE_LIKE_RECORDING_REF_MIN_DIGITS
+    ):
+        raise ValueError("recording references cannot contain phone-like values")
+    return value
+
+
+OpaqueRecordingRef = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=OPAQUE_RECORDING_REF_MAX_LENGTH,
+        pattern=OPAQUE_RECORDING_REF_PATTERN,
+    ),
+    AfterValidator(validate_opaque_recording_ref),
+]
+RecordingContainer = Annotated[
+    str, Field(min_length=1, max_length=32, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+]
 
 
 class RecordingStarted(_Strict):
-    recording_id: str
+    recording_id: OpaqueRecordingRef
     leg: RecordingLeg
-    blob_id: str
-    consent_ref: str
+    blob_id: OpaqueRecordingRef
+    consent_ref: OpaqueRecordingRef
 
 
 class RecordingUploaded(_Strict):
-    recording_id: str
+    recording_id: OpaqueRecordingRef
     leg: RecordingLeg
-    blob_id: str
-    upload_url_ref: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
+    blob_id: OpaqueRecordingRef
+    upload_url_ref: OpaqueRecordingRef
     duration_ms: int = Field(ge=0)
     byte_count: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    container: str
-    consent_ref: str
+    container: RecordingContainer
+    consent_ref: OpaqueRecordingRef
 
 
 class RecordingFailed(_Strict):
-    recording_id: str
+    recording_id: OpaqueRecordingRef
     error_code: str
     retryable: bool = False
 
@@ -183,16 +208,16 @@ class SessionEnd(_Strict):
 
 
 class RecordingStart(_Strict):
-    recording_id: str
+    recording_id: OpaqueRecordingRef
     leg: RecordingLeg
-    blob_id: str
-    upload_url_ref: str = Field(pattern=r"^[A-Za-z0-9._-]+$")
-    container: str
-    consent_ref: str
+    blob_id: OpaqueRecordingRef
+    upload_url_ref: OpaqueRecordingRef
+    container: RecordingContainer
+    consent_ref: OpaqueRecordingRef
 
 
 class RecordingStop(_Strict):
-    recording_id: str
+    recording_id: OpaqueRecordingRef
 
 
 UPSTREAM_TYPES: Dict[str, Type[BaseModel]] = {

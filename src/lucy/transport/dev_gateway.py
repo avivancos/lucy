@@ -12,7 +12,15 @@ consumed and tests are fully deterministic.
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterator, FrozenSet, Iterable, Tuple
+import hashlib
+import ipaddress
+import io
+import struct
+import wave
+from typing import AsyncIterator, Callable, FrozenSet, Iterable, Optional, Tuple
+from urllib.parse import urlparse
+
+import httpx
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.evals import SyntheticCallScenario
@@ -25,6 +33,10 @@ from lucy.transport.schema import (
     Envelope,
     SessionEnded,
     SessionStarted,
+    RecordingFailed,
+    RecordingStart,
+    RecordingStarted,
+    RecordingUploaded,
     SttFinal,
     SttPartial,
     TtsSpeak,
@@ -33,6 +45,16 @@ from lucy.transport.schema import (
     TtsStreamEnd,
     VadSpeechStart,
 )
+
+SIMULATOR_RECORDING_SAMPLE_RATE_HZ = 8000
+SIMULATOR_RECORDING_DURATION_MS = 100
+SIMULATOR_RECORDING_FRAMES = (
+    SIMULATOR_RECORDING_SAMPLE_RATE_HZ * SIMULATOR_RECORDING_DURATION_MS // 1000
+)
+SIMULATOR_RECORDING_AMPLITUDES = {"caller": 1000, "agent": 2000, "mixed": 1500}
+SIMULATOR_UPLOAD_TIMEOUT_SECONDS = 5.0
+SIMULATOR_RECORDING_CONTAINER = "wav"
+SIMULATOR_RECORDING_CONTENT_TYPE = "audio/wav"
 
 
 class LocalGatewaySimulator:
@@ -55,6 +77,8 @@ class LocalGatewaySimulator:
         vad_interrupt_turns: Iterable[int] = (),
         dtmf_steps: Iterable[str] = (),
         amd_steps: Iterable[AmdResult] = (),
+        recording_upload_resolver: Optional[Callable[[str], str]] = None,
+        recording_upload_timeout_seconds: float = SIMULATOR_UPLOAD_TIMEOUT_SECONDS,
     ) -> None:
         self.scenario = scenario
         self.clock = clock or MonotonicClock()
@@ -67,7 +91,10 @@ class LocalGatewaySimulator:
         self.vad_interrupt_turns: FrozenSet[int] = frozenset(vad_interrupt_turns)
         self.dtmf_steps = tuple(dtmf_steps)
         self.amd_steps = tuple(amd_steps)
+        self.recording_upload_resolver = recording_upload_resolver
+        self.recording_upload_timeout_seconds = recording_upload_timeout_seconds
         self._inbound: "asyncio.Queue[Tuple[Envelope, object]]" = asyncio.Queue()
+        self._recording_events: "asyncio.Queue[ControlEvent]" = asyncio.Queue()
         self.sent: list[ControlEvent] = []
         self.directives: list[object] = []
         self._seq = 0
@@ -75,11 +102,124 @@ class LocalGatewaySimulator:
         # increments per event (no wall-clock sleeping, so tests stay deterministic).
         self._ts_ms = int(self.clock.monotonic() * 1000)
 
+    async def execute_recording(self, directive: RecordingStart) -> list[ControlEvent]:
+        """Execute one media-plane recording directive through real HTTP."""
+        if directive.container != SIMULATOR_RECORDING_CONTAINER:
+            return [
+                self._emit(
+                    "recording.failed",
+                    RecordingFailed(
+                        recording_id=directive.recording_id,
+                        error_code="unsupported_container",
+                        retryable=False,
+                    ),
+                )
+            ]
+        events = [
+            self._emit(
+                "recording.started",
+                RecordingStarted(
+                    recording_id=directive.recording_id,
+                    leg=directive.leg,
+                    blob_id=directive.blob_id,
+                    consent_ref=directive.consent_ref,
+                ),
+            )
+        ]
+        try:
+            if self.recording_upload_resolver is None:
+                raise KeyError("recording upload resolver is not configured")
+            upload_url = self.recording_upload_resolver(directive.upload_url_ref)
+        except KeyError:
+            events.append(
+                self._emit(
+                    "recording.failed",
+                    RecordingFailed(
+                        recording_id=directive.recording_id,
+                        error_code="upload_target_missing",
+                        retryable=False,
+                    ),
+                )
+            )
+            return events
+
+        if not _is_safe_local_upload_url(upload_url):
+            events.append(
+                self._emit(
+                    "recording.failed",
+                    RecordingFailed(
+                        recording_id=directive.recording_id,
+                        error_code="upload_target_invalid",
+                        retryable=False,
+                    ),
+                )
+            )
+            return events
+
+        wav_bytes = _deterministic_wav(directive.leg)
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.recording_upload_timeout_seconds
+            ) as client:
+                response = await client.put(
+                    upload_url,
+                    content=wav_bytes,
+                    headers={"content-type": SIMULATOR_RECORDING_CONTENT_TYPE},
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            events.append(
+                self._emit(
+                    "recording.failed",
+                    RecordingFailed(
+                        recording_id=directive.recording_id,
+                        error_code="upload_failed",
+                        retryable=status_code >= 500 or status_code in {408, 429},
+                    ),
+                )
+            )
+            return events
+        except httpx.HTTPError:
+            events.append(
+                self._emit(
+                    "recording.failed",
+                    RecordingFailed(
+                        recording_id=directive.recording_id,
+                        error_code="upload_failed",
+                        retryable=True,
+                    ),
+                )
+            )
+            return events
+
+        events.append(
+            self._emit(
+                "recording.uploaded",
+                RecordingUploaded(
+                    recording_id=directive.recording_id,
+                    leg=directive.leg,
+                    blob_id=directive.blob_id,
+                    upload_url_ref=directive.upload_url_ref,
+                    duration_ms=SIMULATOR_RECORDING_DURATION_MS,
+                    byte_count=len(wav_bytes),
+                    sha256=hashlib.sha256(wav_bytes).hexdigest(),
+                    container=directive.container,
+                    consent_ref=directive.consent_ref,
+                ),
+            )
+        )
+        return events
+
     # -- downstream (session -> gateway) ------------------------------------
 
     async def send(self, envelope: Envelope, payload: object) -> None:
         self.sent.append(ControlEvent(envelope, payload))
         self.directives.append(payload)
+        if isinstance(payload, RecordingStart):
+            for event in await self.execute_recording(payload):
+                await self._recording_events.put(event)
+            return
         await self._inbound.put((envelope, payload))
 
     # -- upstream (gateway -> session) --------------------------------------
@@ -98,18 +238,32 @@ class LocalGatewaySimulator:
     async def events(self) -> AsyncIterator[ControlEvent]:
         yield self._emit(
             "session.started",
-            SessionStarted(transport="sim", caller="+10000000000", codecs=["pcmu"]),
+            SessionStarted(
+                transport="sim",
+                caller="+10000000000",
+                codecs=["pcmu"],
+                features=["recording"],
+            ),
         )
+        await asyncio.sleep(0)
+        while not self._recording_events.empty():
+            yield await self._recording_events.get()
         for digit in self.dtmf_steps:
             yield self._emit("dtmf", Dtmf(digit=digit))
+            async for recording_event in self._drain_recording_events():
+                yield recording_event
         for result in self.amd_steps:
             yield self._emit("amd.result", result)
+            async for recording_event in self._drain_recording_events():
+                yield recording_event
 
         caller_turns = [t for t in self.scenario.turns if t.speaker == "caller"]
         for index, turn in enumerate(caller_turns):
             turn_id = "turn_%d" % index
             async for event in self._caller_turn(turn_id, turn.text):
                 yield event
+                async for recording_event in self._drain_recording_events():
+                    yield recording_event
             if index in self.vad_interrupt_turns:
                 # Caller starts talking again while the agent is still THINKING:
                 # no response is spoken this turn (the session cancels it on VAD).
@@ -119,6 +273,8 @@ class LocalGatewaySimulator:
                     VadSpeechStart(at_ms=self._ts_ms),
                     turn_id=turn_id,
                 )
+                async for recording_event in self._drain_recording_events():
+                    yield recording_event
                 # Drain the cancelled turn's directives up to its stream-end
                 # barrier so nothing leaks into the next turn (card 64). The
                 # session guarantees the barrier even for a cancelled turn.
@@ -128,8 +284,16 @@ class LocalGatewaySimulator:
                 turn_id, interrupt=index in self.barge_in_turns
             ):
                 yield event
+                async for recording_event in self._drain_recording_events():
+                    yield recording_event
 
+        async for recording_event in self._drain_recording_events():
+            yield recording_event
         yield self._emit("session.ended", SessionEnded(reason="scenario_complete"))
+
+    async def _drain_recording_events(self) -> AsyncIterator[ControlEvent]:
+        while not self._recording_events.empty():
+            yield await self._recording_events.get()
 
     async def _caller_turn(
         self, turn_id: str, text: str
@@ -249,3 +413,30 @@ class LocalGatewaySimulator:
                 return
             elif isinstance(directive, TtsStreamEnd):
                 return
+
+
+def _deterministic_wav(leg: str) -> bytes:
+    amplitude = SIMULATOR_RECORDING_AMPLITUDES[leg]
+    frames = b"".join(
+        struct.pack("<h", amplitude if index % 2 == 0 else -amplitude)
+        for index in range(SIMULATOR_RECORDING_FRAMES)
+    )
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SIMULATOR_RECORDING_SAMPLE_RATE_HZ)
+        wav.writeframes(frames)
+    return output.getvalue()
+
+
+def _is_safe_local_upload_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme != "http" or parsed.username or parsed.password:
+        return False
+    if parsed.hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(parsed.hostname or "").is_loopback
+    except ValueError:
+        return False

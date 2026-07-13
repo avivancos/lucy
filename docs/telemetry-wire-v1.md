@@ -55,14 +55,17 @@ client-side PII redaction path as transcripts and tool arguments.
 | `business` | `turn_id?`, `funnel_stage`, `funnel_confidence`, `sentiment_label`, `sentiment_confidence` |
 | `tool_call` | `turn_id`, `server`, `tool`, `allowed`, `latency_ms`, `error?`, `arguments` (post-redaction only) |
 | `transcript` | `turn_id`, `role` (caller/agent), `text` (final segments only, post-redaction) |
-| `audio_ref` | `turn_id?`, `blob_id`, `upload_url_requested` (audio bytes never inline) |
+| `audio_ref` | `turn_id?`, `blob_id`, `upload_url_requested`, optional `recording_id`, `leg`, `duration_ms`, `byte_count`, `sha256`, `container`, `consent_ref` (audio bytes never inline) |
 
-`audio_ref` is emitted only after the media plane reports a successful
-`recording.uploaded` control event. Its `blob_id` is the join key; recording
-metadata such as leg, duration, byte count, SHA-256, container, and consent
-reference remains on the control event and can be copied into additive span
-attributes. `upload_url_ref` is opaque and must never contain credentials or raw
-audio.
+An `audio_ref` derived from recording is emitted only after the media plane
+reports `recording.uploaded` and the configured `BlobStore` confirms object
+existence, byte count, SHA-256, container, and duration. Its `blob_id` is the
+join key; validated recording metadata is copied into additive `audio_ref`
+fields. `upload_url_ref` and `consent_ref` are opaque identifiers limited to 128
+characters using only letters, digits, `.`, `_`, `:`, and `-`. Phone-like
+numeric references are rejected; neither field may contain credentials, PII,
+URLs, or raw audio. The public `Tracer.audio_ref` method remains available for
+non-recording asset references and enforces the same metadata schema.
 
 ## Privacy controls (enforced client-side, in open code)
 

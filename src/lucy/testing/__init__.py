@@ -14,6 +14,7 @@ from lucy.testing.mcp import LocalMcpCommandTransport
 from lucy.testing.metrics import LocalMetricEventChannel
 from lucy.testing.observe import InMemoryOtelSpanExporter, InMemoryTraceExporter
 from lucy.testing.rag import LocalEmbeddingFixture
+from lucy.testing.recording import RecordingBlobStoreSimulator
 from lucy.testing.realtime import (
     LocalRealtimeSimulator,
     ScriptedRealtimeToolCall,
@@ -30,6 +31,7 @@ __all__ = [
     "InMemoryTraceExporter",
     "LocalMetricEventChannel",
     "LocalRealtimeSimulator",
+    "RecordingBlobStoreSimulator",
     "ScriptedRealtimeToolCall",
     "ScriptedRealtimeTurn",
     "check_checkpoint_store",

@@ -148,6 +148,12 @@ class Tracer:
         """Mint an id from the tracer's id factory (e.g. for span ids)."""
         return self._id_factory()
 
+    def audio_recording_allowed(self, session_id: str) -> bool:
+        """Whether recording may create an asset that this tracer can reference."""
+        return (
+            self._enabled and self._record_audio and self._session_sampled(session_id)
+        )
+
     # -- sampling -----------------------------------------------------------
 
     def _session_sampled(self, session_id: str) -> bool:
@@ -415,6 +421,13 @@ class Tracer:
         blob_id: str,
         turn_id: Optional[str] = None,
         upload_url_requested: bool = False,
+        recording_id: Optional[str] = None,
+        leg: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        byte_count: Optional[int] = None,
+        sha256: Optional[str] = None,
+        container: Optional[str] = None,
+        consent_ref: Optional[str] = None,
         tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
@@ -427,6 +440,13 @@ class Tracer:
                 blob_id=blob_id,
                 turn_id=turn_id,
                 upload_url_requested=upload_url_requested,
+                recording_id=recording_id,
+                leg=leg,  # type: ignore[arg-type]
+                duration_ms=duration_ms,
+                byte_count=byte_count,
+                sha256=sha256,
+                container=container,
+                consent_ref=consent_ref,
                 tags=self._event_tags(tags),
             )
         )

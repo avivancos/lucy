@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -89,6 +89,12 @@ class ObservabilitySpec(BaseModel):
     primary_metric: str = "cost_per_minute"
 
 
+class RecordingSpec(BaseModel):
+    enabled: bool = False
+    channels: Literal["dual", "mixed"] = "dual"
+    require_consent: bool = True
+
+
 class EvalSpec(BaseModel):
     scenarios: List[str] = Field(default_factory=list)
     golden_transcripts: List[str] = Field(default_factory=list)
@@ -102,4 +108,5 @@ class LucySpec(BaseModel):
     mcp: McpSpec = Field(default_factory=McpSpec)
     crm: Optional[CrmSpec] = None
     observability: ObservabilitySpec = Field(default_factory=ObservabilitySpec)
+    recording: RecordingSpec = Field(default_factory=RecordingSpec)
     evals: EvalSpec = Field(default_factory=EvalSpec)

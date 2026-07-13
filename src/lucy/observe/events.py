@@ -12,6 +12,7 @@ from typing import Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.transport.schema import OpaqueRecordingRef, RecordingContainer
 
 WIRE_VERSION = "1"
 
@@ -111,6 +112,13 @@ class AudioRefEvent(TelemetryEventBase):
     blob_id: str
     turn_id: Optional[str] = None
     upload_url_requested: bool = False
+    recording_id: Optional[OpaqueRecordingRef] = None
+    leg: Optional[Literal["caller", "agent", "mixed"]] = None
+    duration_ms: Optional[int] = Field(default=None, ge=0)
+    byte_count: Optional[int] = Field(default=None, ge=0)
+    sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    container: Optional[RecordingContainer] = None
+    consent_ref: Optional[OpaqueRecordingRef] = None
 
 
 TelemetryEvent = Union[
