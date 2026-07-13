@@ -35,8 +35,8 @@ Read, in this order, before writing anything:
 - `src/lucy/runtime.py` - `GraphExecutor` per-turn execution (deadlines, retries,
   fallbacks); the RED turn/LLM/tool counters and the deadline/fallback counters are
   sourced from its execution path (instrumented in card 25).
-- `src/lucy/voice.py` - `RealtimeVoicePipeline`/VoiceSession; the active-session
-  gauge counts live sessions here.
+- `src/lucy/session.py` - `VoiceSession`; the active-session gauge counts live
+  sessions here.
 - `tests/test_api.py` - house style: plain pytest + `TestClient`, no mocks.
 
 ## Spec
