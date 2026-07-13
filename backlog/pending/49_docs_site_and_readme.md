@@ -44,17 +44,17 @@ Read, in this order, before writing anything:
   `default_model_registry()`; catalog rows quoted in the providers guide.
 - `tests/test_product_docs.py` - house style for doc-contract tests:
   plain pytest, substring assertions on lowercased doc text.
-- `backlog/pending/26_add_voice_agent_facade_and_public_api.md`,
-  `backlog/pending/28_add_plugin_mechanism_and_workspace.md`,
-  `backlog/pending/29_ship_first_provider_plugins.md` - quickstart,
+- `backlog/done/26_add_voice_agent_facade_and_public_api.md`,
+  `backlog/done/28_add_plugin_mechanism_and_workspace.md`,
+  `backlog/done/29_ship_first_provider_plugins.md` - quickstart,
   `VoiceAgent`, spec strings, `LucyPlugin`, entry points, contract suites,
   fixture recording. In `backlog/done/` once executed.
-- `backlog/pending/37_runtime_m5_agent_graph_checkpointing.md`,
-  `backlog/pending/39_add_prebuilt_node_catalog.md` - `AgentGraph`,
+- `backlog/done/37_runtime_m5_agent_graph_checkpointing.md`,
+  `backlog/done/39_add_prebuilt_node_catalog.md` - `AgentGraph`,
   checkpointing, the prebuilt node and graph catalog.
-- `backlog/pending/24_build_lucy_observe_package.md`,
-  `backlog/pending/30_build_lucy_cloud_telemetry_client.md`,
-  `backlog/pending/31_add_local_trace_viewer.md` - `configure()`,
+- `backlog/done/24_build_lucy_observe_package.md`,
+  `backlog/done/30_build_lucy_cloud_telemetry_client.md`,
+  `backlog/done/31_add_local_trace_viewer.md` - `configure()`,
   exporters, `LUCY_API_KEY` auto-attach, `lucy.serve.devviewer`.
 
 Landed-by-S8 inputs (this card is last in the roadmap; these exist by the
@@ -341,7 +341,9 @@ Create: `docs/guides/getting-started.md`,
 `docs/guides/providers-and-plugins.md`, `docs/guides/agent-graphs.md`,
 `docs/guides/observability.md`, `docs/guides/testing-without-mocks.md`,
 `docs/guides/transports-and-telephony.md`, `tests/test_docs_guides.py`.
-Modify: `README.md`. Nothing else is touched.
+Modify: `README.md` and `docs/adr/0010-open-core-split.md`. Nothing else is
+touched. Refresh ADR 0010's implementation-status wording for the provider
+plugins and `lucy-cloud`; the open-core decision itself does not change.
 
 ## Chips
 
@@ -352,7 +354,8 @@ Modify: `README.md`. Nothing else is touched.
   `test_readme_documents_cloud_env_var`,
   `test_every_python_block_runs_offline_with_exit_zero`,
   `test_relative_markdown_links_resolve`; `GUIDES` starts empty). Run it
-  red against the current README, then rewrite `README.md` per the Spec,
+  red against the current README, then rewrite `README.md` per the Spec and
+  refresh ADR 0010's stale implementation-status wording,
   running the quickstart block by hand once before wiring it in. Files:
   `tests/test_docs_guides.py`, `README.md`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass
