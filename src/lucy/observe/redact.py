@@ -1,45 +1,154 @@
-"""Client-side privacy pass (wire spec privacy controls, ADR 0010).
+"""Client-side telemetry privacy pass (wire controls, ADR 0010).
 
-Nothing sensitive leaves the process unless explicitly enabled. ``redact_event``
-runs over every event BEFORE it is enqueued for export: it drops suppressed
-event types (transcripts kill-switch, audio when ``record_audio`` is false) and
-redacts PII from transcript text and tool-call arguments.
+Before export, this module applies sampling-adjacent suppression, always-on
+secret scrubbing, optional PII redaction, bounded recursive traversal,
+structural-identifier rejection, and identity/payload-bound export approval.
 """
 
 from __future__ import annotations
 
-import re
+import hashlib
+import hmac
+import json
+import math
 from typing import Dict, Optional
 
+from lucy.privacy import (
+    REDACTED,
+    is_secret_key as _is_secret_key,
+    redact_pii as _redact_pii,
+    redact_text as _redact_text,
+    scrub_secrets as _scrub_secrets,
+)
 from lucy.observe.events import (
     AudioRefEvent,
+    BusinessEvent,
+    SessionEndedEvent,
+    SessionStartedEvent,
+    SpanEvent,
     TelemetryEvent,
     ToolCallEvent,
     TranscriptEvent,
+    TurnEvent,
 )
 
-REDACTED = "[REDACTED]"
-
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+MAX_REDACTION_DEPTH = 32
+_EXPORT_APPROVAL = object()
 
 
 def redact_text(text: str) -> str:
-    """Mask emails and phone-number-like digit runs deterministically."""
-    text = _EMAIL.sub(REDACTED, text)
-    text = _PHONE.sub(REDACTED, text)
-    return text
+    """Preserve the observability package's public sanitization helper."""
+    return _redact_text(text)
 
 
-def _redact_arguments(arguments: Dict[str, object]) -> Dict[str, object]:
+def _sanitize_text(text: str, *, redact_pii: bool) -> str:
+    scrubbed = _scrub_secrets(text)
+    return _redact_pii(scrubbed) if redact_pii else scrubbed
+
+
+class PrivacyTraversalError(ValueError):
+    """Reject arguments that cannot be processed safely for export."""
+
+
+def _process_json(
+    value: object,
+    *,
+    redact_pii: bool,
+    depth: int = 0,
+    active: Optional[set[int]] = None,
+) -> object:
+    if isinstance(value, str):
+        return _sanitize_text(value, redact_pii=redact_pii)
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise PrivacyTraversalError("tool arguments contain a nonfinite number")
+        return value
+    if depth >= MAX_REDACTION_DEPTH:
+        raise PrivacyTraversalError("tool arguments exceed privacy depth limit")
+    active = active if active is not None else set()
+    if isinstance(value, dict):
+        identity = id(value)
+        if identity in active:
+            raise PrivacyTraversalError("tool arguments contain a cycle")
+        active.add(identity)
+        try:
+            processed = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise PrivacyTraversalError("tool argument keys must be strings")
+                safe_key = _sanitize_text(key, redact_pii=redact_pii)
+                processed[safe_key] = (
+                    REDACTED
+                    if _is_secret_key(key)
+                    else _process_json(
+                        item,
+                        redact_pii=redact_pii,
+                        depth=depth + 1,
+                        active=active,
+                    )
+                )
+            return processed
+        finally:
+            active.remove(identity)
+    if isinstance(value, list):
+        identity = id(value)
+        if identity in active:
+            raise PrivacyTraversalError("tool arguments contain a cycle")
+        active.add(identity)
+        try:
+            return [
+                _process_json(
+                    item,
+                    redact_pii=redact_pii,
+                    depth=depth + 1,
+                    active=active,
+                )
+                for item in value
+            ]
+        finally:
+            active.remove(identity)
+    raise PrivacyTraversalError("tool arguments contain a non-JSON value")
+
+
+def _sanitize_string_map(values: Dict[str, str], *, redact_pii: bool) -> Dict[str, str]:
     return {
-        key: redact_text(value) if isinstance(value, str) else value
-        for key, value in arguments.items()
+        _sanitize_text(key, redact_pii=redact_pii): (
+            REDACTED
+            if _is_secret_key(key)
+            else _sanitize_text(value, redact_pii=redact_pii)
+        )
+        for key, value in values.items()
     }
 
 
-def _redact_tags(tags: Dict[str, str]) -> Dict[str, str]:
-    return {redact_text(key): redact_text(value) for key, value in tags.items()}
+def _structural_values(event: TelemetryEvent) -> list[str]:
+    values = [event.session_id]
+    turn_id = getattr(event, "turn_id", None)
+    if isinstance(turn_id, str):
+        values.append(turn_id)
+    if isinstance(event, SessionStartedEvent):
+        values.extend(
+            item
+            for item in (event.spec_hash, event.graph_hash, event.thread_id)
+            if item is not None
+        )
+    if isinstance(event, SpanEvent):
+        values.extend(
+            item for item in (event.span_id, event.parent_id) if item is not None
+        )
+    return values
+
+
+def _reject_unsafe_structural_values(
+    event: TelemetryEvent, *, redact_pii: bool
+) -> None:
+    for value in _structural_values(event):
+        if _sanitize_text(value, redact_pii=redact_pii) != value:
+            raise PrivacyTraversalError(
+                "structural telemetry identifiers must be opaque"
+            )
 
 
 def redact_event(
@@ -49,16 +158,118 @@ def redact_event(
     record_audio: bool,
     transcripts_enabled: bool,
 ) -> Optional[TelemetryEvent]:
-    """Return the export-safe event, or ``None`` to drop it entirely."""
+    """Return a sanitized event, or ``None`` to suppress it.
+
+    Cloud approval is deliberately absent here and is issued only by
+    ``Tracer._enqueue`` after sampling and all configured policy gates.
+    """
     if isinstance(event, TranscriptEvent) and not transcripts_enabled:
         return None
     if isinstance(event, AudioRefEvent) and not record_audio:
         return None
-    if not redact_pii:
-        return event
-    safe = event.model_copy(update={"tags": _redact_tags(event.tags)})
-    if isinstance(safe, TranscriptEvent):
-        return safe.model_copy(update={"text": redact_text(safe.text)})
+    _reject_unsafe_structural_values(event, redact_pii=redact_pii)
+    safe = event
     if isinstance(safe, ToolCallEvent):
-        return safe.model_copy(update={"arguments": _redact_arguments(safe.arguments)})
+        arguments = _process_json(safe.arguments, redact_pii=redact_pii)
+        assert isinstance(arguments, dict)
+        safe = safe.model_copy(update={"arguments": arguments})
+    safe = safe.model_copy(
+        update={
+            "tags": _sanitize_string_map(safe.tags, redact_pii=redact_pii),
+        }
+    )
+    if isinstance(safe, SessionStartedEvent):
+        safe = safe.model_copy(
+            update={
+                "agent_name": _sanitize_text(safe.agent_name, redact_pii=redact_pii),
+                "environment": _sanitize_text(safe.environment, redact_pii=redact_pii),
+                "transport": _sanitize_text(safe.transport, redact_pii=redact_pii),
+                "agent_version": _sanitize_optional(
+                    safe.agent_version, redact_pii=redact_pii
+                ),
+            }
+        )
+    if isinstance(safe, SessionEndedEvent):
+        safe = safe.model_copy(
+            update={"reason": _sanitize_text(safe.reason, redact_pii=redact_pii)}
+        )
+    if isinstance(safe, TurnEvent):
+        safe = safe.model_copy(
+            update={
+                "timeout_events": [
+                    _sanitize_text(item, redact_pii=redact_pii)
+                    for item in safe.timeout_events
+                ]
+            }
+        )
+    if isinstance(safe, SpanEvent):
+        safe = safe.model_copy(
+            update={
+                "name": _sanitize_text(safe.name, redact_pii=redact_pii),
+                "attributes": _sanitize_string_map(
+                    safe.attributes, redact_pii=redact_pii
+                ),
+            }
+        )
+    if isinstance(safe, BusinessEvent):
+        safe = safe.model_copy(
+            update={
+                "funnel_stage": _sanitize_text(
+                    safe.funnel_stage, redact_pii=redact_pii
+                ),
+                "sentiment_label": _sanitize_text(
+                    safe.sentiment_label, redact_pii=redact_pii
+                ),
+            }
+        )
+    if isinstance(safe, TranscriptEvent):
+        safe = safe.model_copy(
+            update={"text": _sanitize_text(safe.text, redact_pii=redact_pii)}
+        )
+    if isinstance(safe, ToolCallEvent):
+        safe = safe.model_copy(
+            update={
+                "server": _sanitize_text(safe.server, redact_pii=redact_pii),
+                "tool": _sanitize_text(safe.tool, redact_pii=redact_pii),
+                "error": _sanitize_optional(safe.error, redact_pii=redact_pii),
+            }
+        )
     return safe
+
+
+def _sanitize_optional(value: Optional[str], *, redact_pii: bool) -> Optional[str]:
+    return _sanitize_text(value, redact_pii=redact_pii) if value is not None else None
+
+
+def _approve_event(event: TelemetryEvent) -> TelemetryEvent:
+    event._export_approval = (
+        _EXPORT_APPROVAL,
+        id(event),
+        _event_fingerprint(event),
+    )
+    return event
+
+
+def _is_export_approved(event: TelemetryEvent) -> bool:
+    approval = event._export_approval
+    return (
+        isinstance(approval, tuple)
+        and len(approval) == 3
+        and approval[0] is _EXPORT_APPROVAL
+        and approval[1] == id(event)
+        and isinstance(approval[2], bytes)
+        and hmac.compare_digest(approval[2], _event_fingerprint(event))
+    )
+
+
+def _event_fingerprint(event: TelemetryEvent) -> bytes:
+    try:
+        payload = json.dumps(
+            event.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise PrivacyTraversalError("event cannot be fingerprinted safely") from exc
+    return hashlib.sha256(payload).digest()

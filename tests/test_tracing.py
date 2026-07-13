@@ -1,3 +1,5 @@
+import uuid
+
 from lucy.clock import ManualClock
 from lucy.evals import booking_happy_path
 from lucy.observe import Tracer
@@ -12,7 +14,7 @@ def _ids():
 
     def factory():
         state["n"] += 1
-        return "evt_%d" % state["n"]
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"lucy-event-{state['n']}"))
 
     return factory
 

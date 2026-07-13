@@ -1,4 +1,5 @@
 import json
+import uuid
 from pathlib import Path
 
 from fastapi.routing import APIRoute
@@ -23,7 +24,7 @@ def _id_factory():
 
     def factory() -> str:
         state["n"] += 1
-        return "evt_%d" % state["n"]
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"lucy-event-{state['n']}"))
 
     return factory
 

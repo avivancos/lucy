@@ -190,6 +190,14 @@ def test_recording_refs_share_bounded_opaque_schema():
         RecordingStart(upload_url_ref="a" * 129, **base)
 
 
+def test_audio_ref_rejects_non_opaque_blob_id():
+    with pytest.raises(ValidationError):
+        Tracer(exporters=[], record_audio=True).audio_ref(
+            session_id="sess-invalid",
+            blob_id="person@example.com",
+        )
+
+
 def test_simulator_uploads_real_dual_leg_wavs_and_emits_audio_refs():
     result = asyncio.run(_record_dual_leg_call())
     repeated = asyncio.run(_record_dual_leg_call())
@@ -499,7 +507,12 @@ async def _record_dual_leg_call():
             exporters=[exporter],
             record_audio=True,
             clock=lambda: 1000,
-            id_factory=iter(["event-caller", "event-agent"]).__next__,
+            id_factory=iter(
+                [
+                    "069b3f9b-39f4-5ee7-a195-61e3fd85f52a",
+                    "2794c550-b2df-5c6c-b3fb-a30212a13db1",
+                ]
+            ).__next__,
         )
         coordinator = RecordingCoordinator(
             RecordingSpec(enabled=True, channels="dual"),

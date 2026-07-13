@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from lucy.mcp import (
     McpClient,
@@ -183,6 +184,58 @@ def test_latency_waterfall_total():
     waterfall = LatencyWaterfall(stt_ms=1, rag_ms=2, llm_ms=3, tts_ms=4)
 
     assert waterfall.total_ms == 10
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: CostBreakdown(stt_cost=-0.01, billable_audio_minutes=1),
+        lambda: LatencyWaterfall(llm_ms=-1),
+    ],
+)
+def test_cost_and_latency_components_reject_negative_values(factory):
+    with pytest.raises(ValidationError):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "stt_cost",
+        "llm_cost",
+        "tts_cost",
+        "telephony_cost",
+        "rag_cost",
+        "mcp_tool_cost",
+        "infra_cost",
+        "billable_audio_minutes",
+    ],
+)
+def test_cost_components_reject_nonfinite_values(field):
+    values = {"billable_audio_minutes": 1, field: float("inf")}
+    with pytest.raises(ValidationError):
+        CostBreakdown(**values)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["stt_ms", "rag_ms", "llm_ms", "mcp_tools_ms", "tts_ms", "transport_ms"],
+)
+def test_latency_components_reject_nonfinite_values(field):
+    with pytest.raises(ValidationError):
+        LatencyWaterfall(**{field: float("inf")})
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"stt_cost": 1e308, "llm_cost": 1e308, "billable_audio_minutes": 1},
+        {"stt_cost": 1, "billable_audio_minutes": 5e-324},
+    ],
+)
+def test_cost_breakdown_rejects_nonfinite_derived_values(values):
+    with pytest.raises(ValidationError):
+        CostBreakdown(**values)
 
 
 def test_sentiment_funnel_and_crm_metric_contracts():

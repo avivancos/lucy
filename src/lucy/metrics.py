@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from lucy.specs import FunnelStage, SentimentLabel
 
@@ -13,14 +14,22 @@ if TYPE_CHECKING:
 
 
 class CostBreakdown(BaseModel):
-    stt_cost: float = 0.0
-    llm_cost: float = 0.0
-    tts_cost: float = 0.0
-    telephony_cost: float = 0.0
-    rag_cost: float = 0.0
-    mcp_tool_cost: float = 0.0
-    infra_cost: float = 0.0
-    billable_audio_minutes: float = Field(gt=0)
+    stt_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    llm_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    tts_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    telephony_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    rag_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    mcp_tool_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    infra_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    billable_audio_minutes: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_derived_values_are_finite(self) -> "CostBreakdown":
+        if not math.isfinite(self.total_cost) or not math.isfinite(
+            self.cost_per_minute
+        ):
+            raise ValueError("derived cost values must be finite")
+        return self
 
     @property
     def total_cost(self) -> float:
@@ -71,12 +80,12 @@ class CrmMetricEvent(BaseModel):
 
 
 class LatencyWaterfall(BaseModel):
-    stt_ms: float = 0.0
-    rag_ms: float = 0.0
-    llm_ms: float = 0.0
-    mcp_tools_ms: float = 0.0
-    tts_ms: float = 0.0
-    transport_ms: float = 0.0
+    stt_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    rag_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    llm_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    mcp_tools_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    tts_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    transport_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
     @property
     def total_ms(self) -> float:

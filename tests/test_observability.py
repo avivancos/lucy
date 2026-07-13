@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 
 import pytest
 
@@ -15,6 +16,16 @@ from lucy.observe import (
     Tracer,
     configure,
 )
+from lucy.observe.events import (
+    BusinessEvent,
+    SessionEndedEvent,
+    SessionStartedEvent,
+    SpanEvent,
+    ToolCallEvent,
+    TranscriptEvent,
+    TurnEvent,
+)
+from lucy.observe.redact import MAX_REDACTION_DEPTH
 from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
 from lucy.testing import InMemoryOtelSpanExporter, InMemoryTraceExporter
 from lucy.testing import LocalMcpCommandTransport
@@ -25,7 +36,7 @@ def _counter():
 
     def factory() -> str:
         state["n"] += 1
-        return "evt_%d" % state["n"]
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"lucy-event-{state['n']}"))
 
     return factory
 
@@ -145,6 +156,156 @@ def test_typed_methods_emit_each_event_type():
     assert types == ["session.started", "turn", "tool_call"]
 
 
+def test_wire_event_id_must_be_a_uuid():
+    with pytest.raises(ValueError, match="valid UUID"):
+        SessionEndedEvent(
+            event_id="not-a-uuid",
+            session_id="s1",
+            emitted_at_ms=1,
+            reason="completed",
+            duration_ms=1,
+            billable_audio_minutes=1,
+        )
+
+
+def test_invalid_explicit_event_id_is_rejected_before_export():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+
+    with pytest.raises(ValueError, match="valid UUID"):
+        tracer.session_started(
+            session_id="s1",
+            agent_name="booking",
+            spec_hash="h",
+            environment="local",
+            transport="sim",
+            event_id="not-a-uuid",
+        )
+    tracer.flush()
+
+    assert exporter.events == []
+
+
+def _required_wire_string_cases():
+    common = {
+        "event_id": str(uuid.uuid4()),
+        "session_id": "s1",
+        "emitted_at_ms": 1,
+    }
+    cases = [
+        (
+            SessionStartedEvent,
+            {
+                **common,
+                "agent_name": "agent",
+                "spec_hash": "hash",
+                "environment": "test",
+                "transport": "sim",
+            },
+            ("session_id", "agent_name", "spec_hash", "environment", "transport"),
+        ),
+        (
+            SessionEndedEvent,
+            {
+                **common,
+                "reason": "completed",
+                "duration_ms": 1,
+                "billable_audio_minutes": 1,
+            },
+            ("reason",),
+        ),
+        (
+            TurnEvent,
+            {
+                **common,
+                "turn_id": "t1",
+                "turn_index": 0,
+                "latency_waterfall": LatencyWaterfall(),
+            },
+            ("turn_id",),
+        ),
+        (
+            SpanEvent,
+            {
+                **common,
+                "span_id": "span-1",
+                "turn_id": "t1",
+                "name": "node",
+                "status": "ok",
+                "started_at_ms": 1,
+                "ended_at_ms": 2,
+            },
+            ("span_id", "name"),
+        ),
+        (
+            BusinessEvent,
+            {
+                **common,
+                "funnel_stage": "qualified",
+                "funnel_confidence": 1,
+                "sentiment_label": "positive",
+                "sentiment_confidence": 1,
+            },
+            ("funnel_stage", "sentiment_label"),
+        ),
+        (
+            ToolCallEvent,
+            {
+                **common,
+                "turn_id": "t1",
+                "server": "crm",
+                "tool": "lookup",
+                "allowed": True,
+                "latency_ms": 1,
+            },
+            ("turn_id", "server", "tool"),
+        ),
+        (
+            TranscriptEvent,
+            {**common, "turn_id": "t1", "role": "caller", "text": "hello"},
+            ("turn_id",),
+        ),
+    ]
+    return [
+        (model, payload, field) for model, payload, fields in cases for field in fields
+    ]
+
+
+@pytest.mark.parametrize(("model", "payload", "field"), _required_wire_string_cases())
+def test_wire_models_reject_empty_required_strings(model, payload, field):
+    invalid = {**payload, field: ""}
+    with pytest.raises(ValueError):
+        model(**invalid)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: SessionEndedEvent(
+            event_id=str(uuid.uuid4()),
+            session_id="s1",
+            emitted_at_ms=1,
+            reason="completed",
+            duration_ms=1,
+            billable_audio_minutes=float("inf"),
+        ),
+        lambda: ToolCallEvent(
+            event_id=str(uuid.uuid4()),
+            session_id="s1",
+            emitted_at_ms=1,
+            turn_id="t1",
+            server="crm",
+            tool="lookup",
+            allowed=True,
+            latency_ms=float("inf"),
+        ),
+    ],
+)
+def test_wire_models_reject_nonfinite_numbers(factory):
+    with pytest.raises(ValueError):
+        factory()
+
+
 def test_configure_default_uses_console_exporter():
     tracer = configure()
     assert any(isinstance(exp, ConsoleExporter) for exp in tracer._exporters)
@@ -198,7 +359,11 @@ def test_redaction_runs_before_export():
         tool="upsert_lead",
         allowed=True,
         latency_ms=1.0,
-        arguments={"email": "john.doe@example.com", "note": "ok"},
+        arguments={
+            "email": "john.doe@example.com",
+            "note": "ok",
+            "nested": {"contacts": ["john.doe@example.com", "+34 600 123 456"]},
+        },
     )
     tracer.flush()
 
@@ -208,6 +373,138 @@ def test_redaction_runs_before_export():
     assert "[REDACTED]" in transcript.text
     assert tool.arguments["email"] == "[REDACTED]"
     assert tool.arguments["note"] == "ok"
+    assert tool.arguments["nested"] == {"contacts": ["[REDACTED]", "[REDACTED]"]}
+
+
+@pytest.mark.parametrize("redact_pii", [True, False])
+def test_cyclic_tool_arguments_are_dropped_and_counted_fail_open(redact_pii):
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter, redact_pii=redact_pii)
+    cyclic = {}
+    cyclic["self"] = cyclic
+
+    tracer.tool_call(
+        session_id="s1",
+        turn_id="t1",
+        server="crm",
+        tool="lookup",
+        allowed=True,
+        latency_ms=1,
+        arguments=cyclic,
+    )
+    tracer.flush()
+
+    assert exporter.events == []
+    assert tracer.dropped_events == 1
+
+
+@pytest.mark.parametrize(
+    ("container_levels", "expected_events", "expected_drops"),
+    [
+        (MAX_REDACTION_DEPTH, 1, 0),
+        (MAX_REDACTION_DEPTH + 1, 0, 1),
+    ],
+)
+def test_tool_argument_depth_boundary_is_fail_open(
+    container_levels, expected_events, expected_drops
+):
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+    arguments = {}
+    cursor = arguments
+    for _ in range(container_levels - 1):
+        nested = {}
+        cursor["nested"] = nested
+        cursor = nested
+    cursor["value"] = "safe"
+
+    tracer.tool_call(
+        session_id="s1",
+        turn_id="t1",
+        server="crm",
+        tool="lookup",
+        allowed=True,
+        latency_ms=1,
+        arguments=arguments,
+    )
+    tracer.flush()
+
+    assert len(exporter.events) == expected_events
+    assert tracer.dropped_events == expected_drops
+
+
+def test_empty_container_beyond_tool_argument_depth_is_rejected():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+    arguments = {}
+    cursor = arguments
+    for _ in range(MAX_REDACTION_DEPTH):
+        nested = {}
+        cursor["nested"] = nested
+        cursor = nested
+
+    tracer.tool_call(
+        session_id="s1",
+        turn_id="t1",
+        server="crm",
+        tool="lookup",
+        allowed=True,
+        latency_ms=1,
+        arguments=arguments,
+    )
+    tracer.flush()
+
+    assert exporter.events == []
+    assert tracer.dropped_events == 1
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"value": object()}, {"value": float("inf")}],
+)
+def test_non_json_tool_arguments_are_dropped_and_counted(arguments):
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+
+    tracer.tool_call(
+        session_id="s1",
+        turn_id="t1",
+        server="crm",
+        tool="lookup",
+        allowed=True,
+        latency_ms=1,
+        arguments=arguments,
+    )
+    tracer.flush()
+
+    assert exporter.events == []
+    assert tracer.dropped_events == 1
+
+
+async def test_cyclic_denied_mcp_arguments_preserve_permission_error():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+    client = McpClient(
+        LocalMcpCommandTransport(),
+        allowed_tools=[],
+        tracer=tracer,
+    )
+    cyclic = {}
+    cyclic["self"] = cyclic
+
+    with pytest.raises(McpPermissionError):
+        await client.call_tool(
+            "crm",
+            "forbidden",
+            cyclic,
+            session_id="s1",
+            turn_id="t1",
+        )
+
+    tracer.flush()
+    assert len(client.audit_log) == 1
+    assert exporter.events == []
+    assert tracer.dropped_events == 1
 
 
 def test_transcripts_killswitch_drops_transcript_events():
@@ -385,6 +682,26 @@ def test_tags_are_redacted_before_export(monkeypatch):
     assert tags["owner"] == "[REDACTED]"
     assert tags["phone"] == "[REDACTED]"
     assert tags["contact"] == "[REDACTED]"
+
+
+def test_hex_structural_identifier_is_not_mistaken_for_phone_pii():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+    span_id = "d687971559f9407386c63e9c1aed1a09"
+
+    tracer.span(
+        session_id="s1",
+        turn_id=None,
+        span_id=span_id,
+        name="lucy.session",
+        status="ok",
+        started_at_ms=0,
+        ended_at_ms=1,
+    )
+    tracer.flush()
+
+    assert [event.span_id for event in exporter.events] == [span_id]
+    assert tracer.dropped_events == 0
 
 
 def test_session_started_carries_run_identity_tags():

@@ -45,7 +45,12 @@ from lucy.observe.otel import (
     OtelSpanExporter,
     TraceAttribute,
 )
-from lucy.observe.redact import redact_event, redact_text
+from lucy.observe.redact import (
+    PrivacyTraversalError,
+    _approve_event,
+    redact_event,
+    redact_text,
+)
 
 DEFAULT_QUEUE_MAXLEN = 2048
 EXPORTER_ENTRY_POINT_GROUP = "lucy.exporters"
@@ -101,8 +106,9 @@ class Tracer:
 
     Typed emit methods build validated :class:`TelemetryEvent` models. Each
     event is gated by deterministic per-session sampling, run through the
-    privacy pass, then appended to a bounded queue. Nothing here raises into
-    the caller; over-capacity and exporter failures increment ``dropped_events``.
+    privacy pass, then appended to a bounded queue. Operational, privacy, and
+    exporter failures are fail-open and increment ``dropped_events``; invalid
+    caller-supplied event schema values still raise validation errors.
     """
 
     def __init__(
@@ -172,18 +178,22 @@ class Tracer:
             return
         if not self._session_sampled(event.session_id):
             return
-        safe = redact_event(
-            event,
-            redact_pii=self._redact_pii,
-            record_audio=self._record_audio,
-            transcripts_enabled=self._transcripts_enabled,
-        )
+        try:
+            safe = redact_event(
+                event,
+                redact_pii=self._redact_pii,
+                record_audio=self._record_audio,
+                transcripts_enabled=self._transcripts_enabled,
+            )
+        except PrivacyTraversalError:
+            self.dropped_events += 1
+            return
         if safe is None:
             return
         if len(self._queue) >= self._maxlen:
             self.dropped_events += 1
             return
-        self._queue.append(safe)
+        self._queue.append(_approve_event(safe))
 
     def _now(self, emitted_at_ms: Optional[int]) -> int:
         return self._clock() if emitted_at_ms is None else emitted_at_ms
@@ -283,7 +293,7 @@ class Tracer:
         self,
         *,
         session_id: str,
-        turn_id: str,
+        turn_id: Optional[str],
         span_id: str,
         name: str,
         status: str,

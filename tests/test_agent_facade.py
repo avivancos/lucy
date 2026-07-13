@@ -3,6 +3,7 @@
 import asyncio
 import runpy
 import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,7 @@ def _counter():
 
     def factory() -> str:
         state["n"] += 1
-        return "evt_%d" % state["n"]
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"lucy-event-{state['n']}"))
 
     return factory
 

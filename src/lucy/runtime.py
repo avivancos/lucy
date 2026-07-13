@@ -251,9 +251,9 @@ class GraphExecutor:
         error: Optional[str],
     ) -> None:
         """Emit a ``span`` telemetry event parented on the current turn. No-ops
-        without a turn context or when tracing is disabled (zero overhead: no
-        span built, no enqueue)."""
-        if not context.turn_id:
+        without session and turn context or when tracing is disabled (zero
+        overhead: no span built, no enqueue)."""
+        if not context.turn_id or not context.session_id:
             return
         tracer = self._tracer if self._tracer is not None else get_tracer()
         if not tracer.enabled:

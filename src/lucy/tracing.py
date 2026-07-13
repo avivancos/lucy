@@ -90,7 +90,7 @@ class TurnSpanTree:
         for span in self.spans:
             tracer.span(
                 session_id=self.session_id,
-                turn_id=span.attributes.get("turn_id", ""),
+                turn_id=span.attributes.get("turn_id") or None,
                 span_id=span.span_id,
                 name=span.name,
                 status=span.status,

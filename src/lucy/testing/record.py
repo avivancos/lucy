@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Union
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from lucy.privacy import (
+    configured_secret_values,
+    contains_configured_secret,
+    is_secret_key,
+    scrub_configured_secrets,
+    scrub_secrets,
+)
 from lucy.testing.replay import RecordedFrame, mask_volatile
 
 VOLATILE_FIELDS = (
@@ -20,16 +27,6 @@ VOLATILE_FIELDS = (
     "id",
     "created",
     "session.id",
-)
-CREDENTIAL_FIELDS = frozenset(
-    {
-        "authorization",
-        "api_key",
-        "xi-api-key",
-        "xi_api_key",
-        "token",
-        "access_token",
-    }
 )
 
 
@@ -43,11 +40,16 @@ def _scrub_url(value: str, secrets: Set[str]) -> str:
     parsed = urlsplit(value)
     if not parsed.scheme or not parsed.query:
         return value
-    clean_query = [
-        (key, item)
-        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.casefold() not in CREDENTIAL_FIELDS and item not in secrets
-    ]
+    clean_query = []
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        if is_secret_key(key) or contains_configured_secret(key, secrets):
+            continue
+        clean_query.append(
+            (
+                key,
+                scrub_configured_secrets(item, secrets, replacement="<scrubbed>"),
+            )
+        )
     return urlunsplit(
         (
             parsed.scheme,
@@ -64,17 +66,23 @@ def scrub_payload(payload: dict, secrets: Sequence[str]) -> dict:
 
     def visit(value: object) -> object:
         if isinstance(value, dict):
-            return {
-                key: visit(item)
-                for key, item in value.items()
-                if key.casefold() not in CREDENTIAL_FIELDS
-            }
+            scrubbed = {}
+            for key, item in value.items():
+                if isinstance(key, str) and (
+                    is_secret_key(key) or contains_configured_secret(key, secret_values)
+                ):
+                    continue
+                scrubbed[key] = visit(item)
+            return scrubbed
         if isinstance(value, list):
             return [visit(item) for item in value]
         if isinstance(value, str):
             if value in secret_values:
                 return "<scrubbed>"
-            return _scrub_url(value, secret_values)
+            safe = scrub_secrets(_scrub_url(value, secret_values))
+            return scrub_configured_secrets(
+                safe, secret_values, replacement="<scrubbed>"
+            )
         return value
 
     scrubbed = visit(payload)
@@ -106,12 +114,7 @@ def write_fixture(
 
 
 def _configured_secrets() -> List[str]:
-    markers = ("KEY", "TOKEN", "SECRET")
-    return [
-        value
-        for name, value in os.environ.items()
-        if value and any(marker in name.upper() for marker in markers)
-    ]
+    return list(configured_secret_values(os.environ))
 
 
 async def _run_scenario(plugin: str, scenario_name: str) -> RecordingResult:

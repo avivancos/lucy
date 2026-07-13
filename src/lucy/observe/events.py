@@ -1,27 +1,43 @@
 """Telemetry event models mirroring the wire protocol v1.
 
 Each event corresponds to a row in ``docs/telemetry-wire-v1.md`` "Event types".
-Within wire v1, changes are additive only. ``to_wire()`` returns the JSON-able
-payload (including derived cost fields) that exporters serialize.
+After the first public freeze, wire-v1 changes are additive only; this normative
+draft still permits producer/server alignment before card 46. ``to_wire()``
+returns the JSON-able payload (including derived cost fields) that exporters
+serialize.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional, Union
+from typing import Annotated, Dict, List, Literal, Optional, Union
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.privacy import contains_sensitive_text
 from lucy.transport.schema import OpaqueRecordingRef, RecordingContainer
 
 WIRE_VERSION = "1"
+NonEmptyString = Annotated[str, Field(min_length=1)]
 
 
 class TelemetryEventBase(BaseModel):
+    _export_approval: object = PrivateAttr(default=None)
+
     event_id: str
-    session_id: str
+    session_id: NonEmptyString
     emitted_at_ms: int = Field(ge=0)
     tags: Dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("event_id")
+    @classmethod
+    def validate_event_id(cls, value: str) -> str:
+        try:
+            UUID(value)
+        except ValueError as exc:
+            raise ValueError("event_id must be a valid UUID") from exc
+        return value
 
     def to_wire(self) -> Dict[str, object]:
         return self.model_dump(mode="json")
@@ -29,10 +45,10 @@ class TelemetryEventBase(BaseModel):
 
 class SessionStartedEvent(TelemetryEventBase):
     type: Literal["session.started"] = "session.started"
-    agent_name: str
-    spec_hash: str
-    environment: str
-    transport: str
+    agent_name: NonEmptyString
+    spec_hash: NonEmptyString
+    environment: NonEmptyString
+    transport: NonEmptyString
     agent_version: Optional[str] = None
     graph_hash: Optional[str] = None
     thread_id: Optional[str] = None
@@ -40,14 +56,14 @@ class SessionStartedEvent(TelemetryEventBase):
 
 class SessionEndedEvent(TelemetryEventBase):
     type: Literal["session.ended"] = "session.ended"
-    reason: str
+    reason: NonEmptyString
     duration_ms: int = Field(ge=0)
-    billable_audio_minutes: float = Field(ge=0)
+    billable_audio_minutes: float = Field(ge=0, allow_inf_nan=False)
 
 
 class TurnEvent(TelemetryEventBase):
     type: Literal["turn"] = "turn"
-    turn_id: str
+    turn_id: NonEmptyString
     turn_index: int = Field(ge=0)
     latency_waterfall: LatencyWaterfall
     interrupted: bool = False
@@ -56,9 +72,9 @@ class TurnEvent(TelemetryEventBase):
 
 class SpanEvent(TelemetryEventBase):
     type: Literal["span"] = "span"
-    span_id: str
-    turn_id: str
-    name: str
+    span_id: NonEmptyString
+    turn_id: Optional[NonEmptyString] = None
+    name: NonEmptyString
     status: Literal["ok", "fallback", "error", "cancelled"]
     started_at_ms: int = Field(ge=0)
     ended_at_ms: int = Field(ge=0)
@@ -82,34 +98,34 @@ class CostEvent(TelemetryEventBase):
 
 class BusinessEvent(TelemetryEventBase):
     type: Literal["business"] = "business"
-    funnel_stage: str
+    funnel_stage: NonEmptyString
     funnel_confidence: float = Field(ge=0.0, le=1.0)
-    sentiment_label: str
+    sentiment_label: NonEmptyString
     sentiment_confidence: float = Field(ge=0.0, le=1.0)
     turn_id: Optional[str] = None
 
 
 class ToolCallEvent(TelemetryEventBase):
     type: Literal["tool_call"] = "tool_call"
-    turn_id: str
-    server: str
-    tool: str
+    turn_id: NonEmptyString
+    server: NonEmptyString
+    tool: NonEmptyString
     allowed: bool
-    latency_ms: float = Field(ge=0.0)
+    latency_ms: float = Field(ge=0.0, allow_inf_nan=False)
     error: Optional[str] = None
     arguments: Dict[str, object] = Field(default_factory=dict)
 
 
 class TranscriptEvent(TelemetryEventBase):
     type: Literal["transcript"] = "transcript"
-    turn_id: str
+    turn_id: NonEmptyString
     role: Literal["caller", "agent"]
     text: str
 
 
 class AudioRefEvent(TelemetryEventBase):
     type: Literal["audio_ref"] = "audio_ref"
-    blob_id: str
+    blob_id: OpaqueRecordingRef
     turn_id: Optional[str] = None
     upload_url_requested: bool = False
     recording_id: Optional[OpaqueRecordingRef] = None
@@ -119,6 +135,13 @@ class AudioRefEvent(TelemetryEventBase):
     sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     container: Optional[RecordingContainer] = None
     consent_ref: Optional[OpaqueRecordingRef] = None
+
+    @field_validator("blob_id", "recording_id", "consent_ref")
+    @classmethod
+    def validate_sensitive_reference(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and contains_sensitive_text(value):
+            raise ValueError("recording reference cannot contain sensitive values")
+        return value
 
 
 TelemetryEvent = Union[
