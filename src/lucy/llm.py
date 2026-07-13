@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lucy.clock import Clock
 from lucy.providers import Capability, ModelInfo, ModelRegistry
+from lucy.limits import MAX_USAGE_UNITS
 
 PROMPT_CACHE_FIELD = "prompt_cache_key"
 
@@ -77,6 +78,22 @@ class UsageReport:
     prompt_tokens: int
     completion_tokens: int
     cached_prompt_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        values = (
+            self.prompt_tokens,
+            self.completion_tokens,
+            self.cached_prompt_tokens,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= MAX_USAGE_UNITS
+            for value in values
+        ):
+            raise ValueError("usage counters must be bounded nonnegative integers")
+        if self.cached_prompt_tokens > self.prompt_tokens:
+            raise ValueError("cached prompt tokens cannot exceed prompt tokens")
 
 
 @dataclass(frozen=True)
@@ -325,6 +342,9 @@ def _usage_from(raw: Dict[str, object]) -> UsageReport:
 
 def _int_field(raw: Dict[str, object], name: str) -> int:
     value = raw.get(name, 0)
-    if not isinstance(value, (int, str)):
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise ValueError("%s must be an integer" % name)
-    return int(value)
+    parsed = int(value)
+    if not 0 <= parsed <= MAX_USAGE_UNITS:
+        raise ValueError("%s is outside the supported usage range" % name)
+    return parsed

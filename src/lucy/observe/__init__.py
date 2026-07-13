@@ -328,6 +328,8 @@ class Tracer:
         session_id: str,
         cost: CostBreakdown,
         turn_id: Optional[str] = None,
+        pricebook_version: Optional[str] = None,
+        attribution: Optional[Dict[str, float]] = None,
         tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
@@ -339,6 +341,8 @@ class Tracer:
                 emitted_at_ms=self._now(emitted_at_ms),
                 cost=cost,
                 turn_id=turn_id,
+                pricebook_version=pricebook_version,
+                attribution=dict(attribution or {}),
                 tags=self._event_tags(tags),
             )
         )

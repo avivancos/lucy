@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from lucy.observe import Tracer, get_tracer
 
@@ -81,6 +81,7 @@ class McpClient:
         *,
         session_id: str = "",
         turn_id: str = "",
+        on_dispatch: Optional[Callable[[], None]] = None,
     ) -> Any:
         key = "%s.%s" % (server, tool)
         allowed = key in self.allowed_tools or tool in self.allowed_tools
@@ -119,6 +120,9 @@ class McpClient:
                     latency_ms=0.0,
                 )
                 raise
+
+        if on_dispatch is not None:
+            on_dispatch()
 
         started = time.perf_counter()
         try:

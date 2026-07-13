@@ -130,7 +130,13 @@ class McpToolExecutor:
         self._clock = clock
         self._emit = emit
 
-    async def execute(self, tool: ToolDef, arguments: dict) -> ToolResult:
+    async def execute(
+        self,
+        tool: ToolDef,
+        arguments: dict,
+        *,
+        on_dispatch: Optional[Callable[[], None]] = None,
+    ) -> ToolResult:
         started = self._clock.monotonic()
         ok = False
         value: Any = None
@@ -142,6 +148,7 @@ class McpToolExecutor:
                 tool.name,
                 arguments,
                 timeout_ms=tool.profile.deadline_ms,
+                on_dispatch=on_dispatch,
             )
             ok = True
         except McpPermissionError as exc:

@@ -23,6 +23,7 @@ from lucy.privacy import (
 from lucy.observe.events import (
     AudioRefEvent,
     BusinessEvent,
+    CostEvent,
     SessionEndedEvent,
     SessionStartedEvent,
     SpanEvent,
@@ -220,6 +221,18 @@ def redact_event(
                 "sentiment_label": _sanitize_text(
                     safe.sentiment_label, redact_pii=redact_pii
                 ),
+            }
+        )
+    if isinstance(safe, CostEvent):
+        safe = safe.model_copy(
+            update={
+                "pricebook_version": _sanitize_optional(
+                    safe.pricebook_version, redact_pii=redact_pii
+                ),
+                "attribution": {
+                    _sanitize_text(key, redact_pii=redact_pii): value
+                    for key, value in safe.attribution.items()
+                },
             }
         )
     if isinstance(safe, TranscriptEvent):

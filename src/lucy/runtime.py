@@ -43,6 +43,8 @@ class TurnContext(GraphContext):
     promoted: asyncio.Event = field(default_factory=asyncio.Event)
     buffered_directives: List[Any] = field(default_factory=list)
     current_user_in_state: bool = False
+    rag_dispatch_observer: Optional[Callable[[], None]] = None
+    mcp_dispatch_observer: Optional[Callable[[], None]] = None
 
 
 @dataclass

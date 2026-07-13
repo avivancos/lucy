@@ -15,8 +15,10 @@ from lucy.clock import Clock, ManualClock
 from lucy.drivers import TurnDriver
 from lucy.evals import EvalEvidence, SyntheticCallScenario
 from lucy.metrics import LatencyWaterfall
+from lucy.pricing import PriceBook, TelephonyDirection
+from lucy.rag import SpeculativeRagNode
 from lucy.session import Responder, TurnRecord, VoiceSession
-from lucy.settings import LatencyBudgets
+from lucy.settings import LatencyBudgets, SpeculationSettings
 from lucy.state import Checkpoint, ConversationState
 from lucy.tracing import Span
 from lucy.transport.dev_gateway import LocalGatewaySimulator
@@ -74,6 +76,10 @@ class ConversationHarness:
         budgets: Optional[LatencyBudgets] = None,
         barge_in_turns: Iterable[int] = (),
         vad_interrupt_turns: Iterable[int] = (),
+        pricebook: Optional[PriceBook] = None,
+        telephony_direction: TelephonyDirection = TelephonyDirection.INBOUND,
+        rag: Optional[SpeculativeRagNode] = None,
+        speculation: Optional[SpeculationSettings] = None,
     ) -> HarnessResult:
         clock = clock or ManualClock()
         if not tuple(barge_in_turns) and scenario.expected_outcome == "interruption":
@@ -94,6 +100,10 @@ class ConversationHarness:
             tracer=tracer,
             clock=clock,
             budgets=budgets,
+            pricebook=pricebook,
+            telephony_direction=telephony_direction,
+            rag=rag,
+            speculation=speculation,
         )
         records = await session.run()
         checkpoints: List[Checkpoint] = []

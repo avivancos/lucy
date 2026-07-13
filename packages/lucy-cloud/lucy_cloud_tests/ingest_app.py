@@ -211,6 +211,17 @@ def _valid_event(event: object) -> bool:
             all(_nonnegative_number(event[field]) for field in required_fields)
             and event["billable_audio_minutes"] > 0
             and _optional_string(event, "turn_id")
+            and _optional_nonempty_string(event, "pricebook_version")
+            and (
+                "attribution" not in event
+                or (
+                    isinstance(event["attribution"], dict)
+                    and all(
+                        _nonempty_string(key) and _nonnegative_number(value)
+                        for key, value in event["attribution"].items()
+                    )
+                )
+            )
         )
     if event_type == "business":
         return (
@@ -292,6 +303,11 @@ def _string_list(value: object) -> bool:
 def _optional_string(event: dict, field: str) -> bool:
     value = event.get(field)
     return value is None or isinstance(value, str)
+
+
+def _optional_nonempty_string(event: dict, field: str) -> bool:
+    value = event.get(field)
+    return value is None or _nonempty_string(value)
 
 
 def _optional_nonnegative_int(event: dict, field: str) -> bool:

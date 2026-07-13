@@ -47,6 +47,7 @@ from lucy.transport.schema import (
     TtsPlayback,
     TtsStreamEnd,
     VadSpeechStart,
+    VadSpeechEnd,
 )
 
 SIMULATOR_RECORDING_SAMPLE_RATE_HZ = 8000
@@ -322,6 +323,12 @@ class LocalGatewaySimulator:
         self, turn_id: str, text: str
     ) -> AsyncIterator[ControlEvent]:
         words = text.split()
+        speech_started_ms = self._ts_ms
+        yield self._emit(
+            "vad.speech_start",
+            VadSpeechStart(at_ms=speech_started_ms),
+            turn_id=turn_id,
+        )
         accumulated = ""
         for position, word in enumerate(words):
             accumulated = (accumulated + " " + word).strip()
@@ -334,6 +341,14 @@ class LocalGatewaySimulator:
                 ),
                 turn_id=turn_id,
             )
+        yield self._emit(
+            "vad.speech_end",
+            VadSpeechEnd(
+                at_ms=self._ts_ms,
+                speech_ms=max(0, self._ts_ms - speech_started_ms),
+            ),
+            turn_id=turn_id,
+        )
         self._ts_ms += self.budgets.stt_final_ms
         yield self._emit(
             "stt.final",
@@ -385,8 +400,7 @@ class LocalGatewaySimulator:
                 )
             return
 
-        # started for the first clause only; the session's SPEAKING transition
-        # and speak_started_ms key off this single event.
+        # The simulator models a streamed response as one continuous playback.
         yield self._playback(turn_id, utterances[0].utterance_id, "started", 0)
 
         if interrupt:

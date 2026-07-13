@@ -125,6 +125,8 @@ def _valid_known_events() -> dict[str, dict]:
             "billable_audio_minutes": 1.0,
             "total_cost": 0.0,
             "cost_per_minute": 0.0,
+            "pricebook_version": "voice-2026-07",
+            "attribution": {"llm_prompt_tokens": 10.0},
         },
         "business": {
             **_common("business", 35),
@@ -364,6 +366,30 @@ async def test_span_optional_parent_and_turn_ids_can_be_omitted(conformance_targ
         "attributes": {},
     }
     assert (await _post(conformance_target, [event])).status_code == 202
+
+
+async def test_cost_additive_pricing_metadata_is_accepted(conformance_target):
+    event = _valid_known_events()["cost"]
+    assert (await _post(conformance_target, [event])).status_code == 202
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pricebook_version", ""),
+        ("attribution", []),
+        ("attribution", {"llm_prompt_tokens": -1.0}),
+        ("attribution", {"llm_prompt_tokens": float("inf")}),
+        ("attribution", {"": 1.0}),
+    ],
+)
+async def test_invalid_cost_pricing_metadata_is_rejected(
+    conformance_target, field, value
+):
+    event = {**_valid_known_events()["cost"], field: value}
+    response = await _post(conformance_target, [event])
+    assert response.status_code == 422
+    assert _invalid_indices(response) == [0]
 
 
 @pytest.mark.parametrize(

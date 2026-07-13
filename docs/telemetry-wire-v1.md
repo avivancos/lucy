@@ -69,7 +69,7 @@ numbers; integers do not accept booleans.
 | `session.ended` | Nonempty `reason`; nonnegative integer `duration_ms`; nonnegative `billable_audio_minutes` |
 | `turn` | Nonempty `turn_id`; nonnegative integer `turn_index`; `latency_waterfall` with all six nonnegative numbers `stt_ms`, `rag_ms`, `llm_ms`, `mcp_tools_ms`, `tts_ms`, `transport_ms`; boolean `interrupted`; string-list `timeout_events` |
 | `span` | Nonempty `span_id`, `name`; optional nonempty `turn_id`; optional string `parent_id`; `status` in `ok`, `fallback`, `error`, `cancelled`; nonnegative integer `started_at_ms`, `ended_at_ms`; string-to-string `attributes` |
-| `cost` | Optional string `turn_id`; flattened nonnegative `stt_cost`, `llm_cost`, `tts_cost`, `telephony_cost`, `rag_cost`, `mcp_tool_cost`, `infra_cost`, `total_cost`, `cost_per_minute`; strictly positive `billable_audio_minutes` |
+| `cost` | Optional string `turn_id`; optional nonempty `pricebook_version`; optional nonnegative finite number map `attribution`; flattened nonnegative `stt_cost`, `llm_cost`, `tts_cost`, `telephony_cost`, `rag_cost`, `mcp_tool_cost`, `infra_cost`, `total_cost`, `cost_per_minute`; strictly positive `billable_audio_minutes` |
 | `business` | Optional string `turn_id`; nonempty `funnel_stage`, `sentiment_label`; `funnel_confidence` and `sentiment_confidence` in `0..1` |
 | `tool_call` | Nonempty `turn_id`, `server`, `tool`; boolean `allowed`; nonnegative `latency_ms`; optional string `error`; object `arguments` whose nested string keys and values are recursively redacted |
 | `transcript` | Nonempty `turn_id`; `role` in `caller`, `agent`; string `text` containing final, post-redaction segments only |
@@ -84,6 +84,55 @@ limited to 128 characters using only letters, digits, `.`, `_`, `:`, and `-`.
 Phone-like numeric references are rejected; none may contain credentials, PII,
 URLs, or raw audio. The public `Tracer.audio_ref` method remains available for
 non-recording asset references and enforces the same metadata schema.
+
+## Voice cost attribution
+
+`VoiceSession` emits one session-level `cost` event after the control channel
+ends. Session-level events omit `turn_id`, identify the typed price book through
+`pricebook_version`, and always include all seven `CostBreakdown` components.
+An unavailable price or usage fact contributes an explicit zero; components are
+never omitted.
+
+The `attribution` map contains the raw finite, nonnegative quantities used by
+the SDK calculation:
+
+- `llm_prompt_tokens`, `llm_cached_prompt_tokens`, and
+  `llm_completion_tokens`; cached prompt tokens are a subset of prompt tokens
+  and are removed before the ordinary prompt rate is applied.
+- `stt_audio_minutes`, derived from one paired media-plane
+  `vad.speech_start`/`vad.speech_end.speech_ms` cycle per turn, never from STT
+  processing latency. Only one VAD/STT accounting lifecycle may be outstanding;
+  duplicate, overlapping, unpaired, replayed, or timestamp-inconsistent facts are
+  discarded. Completed accounting identities are bounded by the named
+  `MAX_SESSION_ACCOUNTING_TURNS` session limit.
+- `tts_characters` and `tts_audio_seconds`; a price book selects exactly one TTS
+  billing basis. Playback duration accumulates every started-to-terminal
+  utterance interval; a single continuous stream is measured from its first
+  start to its terminal clause.
+- `telephony_minutes`, priced with the session's typed inbound or outbound
+  direction.
+- `rag_requests`, counted for each non-cache retrieval dispatch, including
+  speculative prefetches even when their result is later revised or cancelled.
+- `mcp_tool_calls`, counted only after dispatch to an MCP server. Successes,
+  server errors, and timeouts are billable; local permission, schema, and
+  unknown-tool rejections are not.
+- `infra_minutes`, measured over the same control-channel session boundary as
+  telephony usage.
+
+`src/lucy/pricing.py` is the SDK source of truth. A `PriceBook` can be injected
+directly or loaded from the JSON file named by
+`LUCY_PRICING_PRICEBOOK_PATH`. The loader accepts a bounded regular file only,
+rejects symbolic links and non-file objects, and strictly validates its contents:
+version and ISO-style currency code are typed, all rates are finite and bounded,
+and unknown fields or simultaneous character/second TTS rates are rejected. When
+no file is configured, the
+`unpriced` book preserves the full event and attribution shape with zero rates;
+it does not invent provider prices. Invalid usage or arithmetic is dropped and
+counted fail-open, so accounting cannot terminate the voice session.
+
+Pricing configuration is resolved independently by `PricingSettings` or an
+explicitly injected `PriceBook`. It does not participate in the `observe.configure`
+precedence rules used by tracing exporters and privacy controls.
 
 ## Blob uploads
 
@@ -204,6 +253,12 @@ Explicit `lucy.observe.configure(...)` wins; otherwise environment variables:
 | `LUCY_PROJECT` | project name in the envelope |
 | `LUCY_TRACE_SAMPLE` | session sample rate 0..1 |
 | `LUCY_TRACE_FILE` | JSONL file exporter path |
+
+Pricing is configured independently of `lucy.observe.configure(...)`:
+
+| variable | effect |
+| --- | --- |
+| `LUCY_PRICING_PRICEBOOK_PATH` | optional path to a strictly validated JSON voice price book; absent means the zero-rate `unpriced` book |
 
 ## Versioning
 

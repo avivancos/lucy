@@ -13,6 +13,7 @@ from lucy.llm import (
     UsageReport,
 )
 from lucy.providers import default_model_registry
+from lucy.pricing import PriceBook
 from lucy.session import VoiceSession
 from lucy.settings import LatencyBudgets, LlmPricing
 from lucy.transport.dev_gateway import LocalGatewaySimulator
@@ -86,7 +87,7 @@ async def test_first_tts_speak_before_stream_end_within_budget():
     assert (first_tts_time - start["t"]) <= budgets.llm_first_clause_ms / 1000.0 + 1e-9
 
 
-async def test_report_carries_llm_ms_usage_and_cost():
+async def test_report_carries_llm_ms_and_usage_for_central_pricing():
     budgets = LatencyBudgets()
     clock = ManualClock()
     usage = UsageReport(prompt_tokens=100, completion_tokens=50)
@@ -95,8 +96,7 @@ async def test_report_carries_llm_ms_usage_and_cost():
         clock,
         token_interval_ms=budgets.llm_first_clause_ms / 10,
     )
-    pricing = LlmPricing(prompt_per_1k=0.01, completion_per_1k=0.03)
-    driver = _driver(clock, sim, budgets, pricing=pricing, min_flush_chars=1)
+    driver = _driver(clock, sim, budgets, min_flush_chars=1)
 
     report = {}
 
@@ -112,27 +112,31 @@ async def test_report_carries_llm_ms_usage_and_cost():
     assert r.assistant_text == "Done."
     assert r.usage == usage
     assert r.llm_ms > 0
-    assert r.llm_cost == pytest.approx(100 / 1000 * 0.01 + 50 / 1000 * 0.03)
 
 
-async def test_no_pricing_means_zero_cost():
+async def test_legacy_driver_pricing_remains_compatible():
     clock = ManualClock()
+    usage = UsageReport(prompt_tokens=100, completion_tokens=50)
     sim = LocalLlmSimulator(
-        [ScriptedLlmTurn(tokens=["Hi."], usage=UsageReport(9, 9))],
+        [ScriptedLlmTurn(tokens=["Done."], usage=usage)],
         clock,
-        token_interval_ms=1,
+        token_interval_ms=0,
     )
-    driver = _driver(clock, sim, LatencyBudgets(), min_flush_chars=1)
-    report = {}
+    driver = _driver(
+        clock,
+        sim,
+        LatencyBudgets(),
+        pricing=LlmPricing(prompt_per_1k=0.01, completion_per_1k=0.03),
+        min_flush_chars=1,
+    )
 
-    async def consume():
-        async for event in driver.run_turn("hi", []):
-            if isinstance(event, TurnDriverReport):
-                report["r"] = event
+    events = [event async for event in driver.run_turn("go", [])]
+    report = next(event for event in events if isinstance(event, TurnDriverReport))
 
-    task = asyncio.create_task(consume())
-    await _drain(clock, task, 1)
-    assert report["r"].llm_cost == 0.0
+    assert report.llm_cost == pytest.approx(100 / 1000 * 0.01 + 50 / 1000 * 0.03)
+    assert driver.pricebook is not None
+    session = VoiceSession("legacy-pricing", object(), driver=driver, clock=clock)
+    assert session.pricebook is driver.pricebook
 
 
 async def test_driver_flushes_multiple_clauses_in_order():
@@ -245,19 +249,18 @@ async def test_harness_booking_happy_path_with_llm_simulator():
         clock,
         token_interval_ms=budgets.llm_first_clause_ms / 10,
     )
-    driver = _driver(
-        clock,
-        sim,
-        budgets,
-        pricing=LlmPricing(completion_per_1k=0.02),
-        min_flush_chars=8,
-    )
+    driver = _driver(clock, sim, budgets, min_flush_chars=8)
+    pricebook = PriceBook(version="test", llm_completion_per_1k=0.02)
 
     # the driver's simulator paces tokens on the shared ManualClock, so advance
     # virtual time while the harness runs (no wall time consumed)
     task = asyncio.create_task(
         ConversationHarness().run(
-            booking_happy_path(), None, clock=clock, driver=driver
+            booking_happy_path(),
+            None,
+            clock=clock,
+            driver=driver,
+            pricebook=pricebook,
         )
     )
     await _drain(clock, task, budgets.llm_first_clause_ms / 10)

@@ -86,6 +86,7 @@ async def test_mcp_tool_node_appends_audited_result_to_state():
     )
 
     assert update["tool_results"][0]["ok"] is True
+    assert update["agent_state"]["current_mcp_tool_calls"] == 1
     assert len(client.audit_log) == 1
     assert client.audit_log[0].allowed is True
 

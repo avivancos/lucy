@@ -267,6 +267,7 @@ async def test_default_graph_runs_synthesis_then_llm_then_finalize():
     ]
     assert "Tuesday morning demo slots" in result.agent_state["prompt_context"]
     assert result.agent_state["grounding_ids"] == ["rag:booking_policy:1"]
+    assert result.agent_state["last_turn_report"]["rag_requests"] == 1
     assert result.transcript[-1].text == "Happy to book Tuesday."
     assert result.turns == 1
     assert result.funnel_stage is FunnelStage.BOOKED

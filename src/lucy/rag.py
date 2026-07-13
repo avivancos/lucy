@@ -163,6 +163,9 @@ class SpeculativeRagNode:
     deadline_ms: int = 50
     _cache: Dict[str, RagResult] = field(default_factory=dict)
 
+    def is_cached(self, query: str) -> bool:
+        return query in self._cache
+
     async def prefetch(self, query: str) -> RagResult:
         if query in self._cache:
             cached = self._cache[query]

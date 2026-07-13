@@ -13,9 +13,12 @@ from lucy.evals import (
 from lucy.harness import ConversationHarness, evidence_from_result
 from lucy.llm import LocalLlmSimulator, ScriptedLlmTurn, ToolCallReady, UsageReport
 from lucy.mcp import McpClient
+from lucy.observe import Tracer
+from lucy.pricing import PriceBook
 from lucy.providers import default_model_registry
 from lucy.session import VoiceSession, heard_assistant_text
 from lucy.settings import LatencyBudgets
+from lucy.testing import InMemoryTraceExporter
 from lucy.tools import (
     DEFAULT_FILLERS,
     BargeInPolicy,
@@ -329,7 +332,17 @@ async def test_barge_in_cancels_inflight_tool_with_cancel_policy():
     transport = BlockingToolTransport(clock)
     driver = _tool_driver(clock, transport, BargeInPolicy.CANCEL)
     gateway = ImmediateBargeGateway(mark_chars=4)
-    session = VoiceSession("s", gateway, None, driver=driver, clock=clock)
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(exporters=[exporter])
+    session = VoiceSession(
+        "s",
+        gateway,
+        None,
+        driver=driver,
+        clock=clock,
+        tracer=tracer,
+        pricebook=PriceBook(version="mcp-cancel", mcp_per_call=1.0),
+    )
 
     task = asyncio.create_task(session.run())
     for _ in range(20):
@@ -342,6 +355,10 @@ async def test_barge_in_cancels_inflight_tool_with_cancel_policy():
     assert records[0].interrupted is True
     assert transport.cancelled is True
     assert transport.commands == []
+    tracer.flush()
+    cost = next(event for event in exporter.events if event.type == "cost")
+    assert cost.attribution["mcp_tool_calls"] == 1
+    assert cost.cost.mcp_tool_cost == 1.0
     leaked = set(asyncio.all_tasks()) - before
     leaked.discard(asyncio.current_task())
     assert leaked == set()

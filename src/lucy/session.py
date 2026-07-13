@@ -15,12 +15,30 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import partial
 from typing import Awaitable, Callable, List, Optional, Sequence
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.drivers import TurnDriver, TurnDriverReport
-from lucy.llm import LlmMessage, compute_cache_key
-from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.llm import LlmMessage, UsageReport, compute_cache_key
+from lucy.limits import (
+    MAX_CONTROL_DURATION_MS,
+    MAX_SESSION_ACCOUNTING_TURNS,
+    MAX_USAGE_UNITS,
+)
+from lucy.metrics import (
+    CostBreakdown,
+    LatencyWaterfall,
+    MIN_BILLABLE_AUDIO_MINUTES,
+)
+from lucy.observe import get_tracer
+from lucy.pricing import (
+    PriceBook,
+    PricedVoiceUsage,
+    TelephonyDirection,
+    VoiceUsage,
+    load_pricebook,
+)
 from lucy.rag import RagResult, SpeculativeRagNode, grounded_context_message
 from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, SpeculationSettings
@@ -36,14 +54,11 @@ from lucy.transport.schema import (
     TtsPlayback,
     TtsSpeak,
     TtsStreamEnd,
+    VadSpeechEnd,
     VadSpeechStart,
 )
 
 Responder = Callable[[str], Awaitable[str]]
-
-# Floor so a clock-measured turn duration always satisfies CostBreakdown's
-# billable_audio_minutes > 0 constraint (not a budget - a numerical guard).
-_MIN_BILLABLE_MINUTES = 1e-9
 
 
 def heard_assistant_text(
@@ -173,8 +188,10 @@ class _ActiveTurn:
     mark_chars: int = 0
     tts_ms: int = 0
     llm_ms: float = 0.0
-    llm_cost: float = 0.0
     mcp_tools_ms: float = 0.0
+    mcp_tool_calls: int = 0
+    rag_requests: int = 0
+    usage: Optional[UsageReport] = None
     rag_ms: float = 0.0
     rag_cache_hit: bool = False
     rag_result: Optional[RagResult] = None
@@ -185,6 +202,7 @@ class _ActiveTurn:
     playback_finished: asyncio.Event = field(default_factory=asyncio.Event)
     utterance_texts: List[tuple[str, str]] = field(default_factory=list)
     playbacks: List[TtsPlayback] = field(default_factory=list)
+    playback_started_ms: dict[str, int] = field(default_factory=dict)
     background_tasks: "set[asyncio.Task]" = field(default_factory=set)
     record: Optional[TurnRecord] = None
 
@@ -203,6 +221,8 @@ class VoiceSession:
         budgets: Optional[LatencyBudgets] = None,
         speculation: Optional[SpeculationSettings] = None,
         rag: Optional[SpeculativeRagNode] = None,
+        pricebook: Optional[PriceBook] = None,
+        telephony_direction: TelephonyDirection = TelephonyDirection.INBOUND,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -211,11 +231,35 @@ class VoiceSession:
         self.responder = responder
         self.driver = driver
         self.state_store = state_store
-        self.tracer = tracer
+        self.tracer = tracer if tracer is not None else get_tracer()
         self.clock = clock or MonotonicClock()
         self.budgets = budgets or LatencyBudgets()
         self.speculation = speculation or SpeculationSettings()
         self.rag = rag
+        driver_pricebook = getattr(driver, "pricebook", None)
+        if pricebook is not None and driver_pricebook is not None:
+            raise ValueError(
+                "configure pricing on VoiceSession or its driver, not both"
+            )
+        self.pricebook = (
+            pricebook
+            if pricebook is not None
+            else driver_pricebook
+            if driver_pricebook is not None
+            else load_pricebook()
+        )
+        self.telephony_direction = telephony_direction
+        self._llm_prompt_tokens = 0
+        self._llm_cached_prompt_tokens = 0
+        self._llm_completion_tokens = 0
+        self._stt_audio_ms = 0
+        self._tts_characters = 0
+        self._tts_audio_ms = 0
+        self._rag_requests = 0
+        self._mcp_tool_calls = 0
+        self._vad_started_at: dict[str, int] = {}
+        self._pending_stt_speech_ms: dict[str, int] = {}
+        self._stt_billed_turns: set[str] = set()
         self.state = TurnState.IDLE
         self.transitions: List[TurnState] = [TurnState.IDLE]
         self.spans: List[Span] = []
@@ -237,6 +281,7 @@ class VoiceSession:
         active: Optional[_ActiveTurn] = None
         tree = TurnSpanTree(self.session_id)
         started = False
+        started_ts = 0
         last_ts = 0
         controller = SpeculationController(self.speculation)
         speculative_turn: Optional[_ActiveTurn] = None
@@ -244,17 +289,57 @@ class VoiceSession:
 
         async for event in self.transport.events():
             payload = event.payload
+            event_turn_id = event.envelope.turn_id or "turn"
             last_ts = event.envelope.ts_ms
             if not started:
                 tree.start_session(event.envelope.ts_ms)
+                started_ts = event.envelope.ts_ms
                 started = True
 
-            if isinstance(payload, SttPartial):
+            if isinstance(payload, VadSpeechStart):
+                accounting_cycle_open = bool(
+                    self._vad_started_at or self._pending_stt_speech_ms
+                )
+                if (
+                    accounting_cycle_open
+                    or len(self._stt_billed_turns) >= MAX_SESSION_ACCOUNTING_TURNS
+                    or event_turn_id in self._vad_started_at
+                    or event_turn_id in self._pending_stt_speech_ms
+                    or event_turn_id in self._stt_billed_turns
+                    or payload.at_ms != event.envelope.ts_ms
+                ):
+                    self._drop_pricing_fact()
+                else:
+                    self._vad_started_at[event_turn_id] = payload.at_ms
+                if active is not None and self.state in (
+                    TurnState.THINKING,
+                    TurnState.SPEAKING,
+                ):
+                    await self._interrupt(active, event.envelope.ts_ms, tree, records)
+                    active = None
+
+            elif isinstance(payload, VadSpeechEnd):
+                started_at = self._vad_started_at.pop(event_turn_id, None)
+                elapsed_ms = (
+                    payload.at_ms - started_at if started_at is not None else -1
+                )
+                if (
+                    started_at is None
+                    or event_turn_id in self._pending_stt_speech_ms
+                    or event_turn_id in self._stt_billed_turns
+                    or payload.at_ms != event.envelope.ts_ms
+                    or payload.speech_ms != elapsed_ms
+                ):
+                    self._drop_pricing_fact()
+                else:
+                    self._pending_stt_speech_ms[event_turn_id] = payload.speech_ms
+
+            elif isinstance(payload, SttPartial):
                 self._set_state(TurnState.LISTENING)
                 action = controller.on_partial(payload.text, payload.stability)
                 if action == SpeculativeAction.PREFETCH_RAG and self.rag is not None:
                     self._track_prefetch(
-                        asyncio.create_task(self.rag.prefetch(payload.text))
+                        asyncio.create_task(self._priced_rag_prefetch(payload.text))
                     )
                 elif (
                     action == SpeculativeAction.START_LLM
@@ -275,6 +360,12 @@ class VoiceSession:
                         turn_id=speculative_turn.turn_id,
                         clock=self.clock,
                         speculative=True,
+                        rag_dispatch_observer=partial(
+                            self._record_rag_dispatch, speculative_turn
+                        ),
+                        mcp_dispatch_observer=partial(
+                            self._record_mcp_dispatch, speculative_turn
+                        ),
                     )
                     speculative_turn.task = asyncio.create_task(
                         self._run_driver_turn(speculative_turn, speculative_context)
@@ -282,6 +373,18 @@ class VoiceSession:
                     controller.start(payload.text, speculative_turn.task)
 
             elif isinstance(payload, SttFinal):
+                speech_ms = self._pending_stt_speech_ms.pop(event_turn_id, None)
+                if (
+                    speech_ms is not None
+                    and event_turn_id not in self._stt_billed_turns
+                ):
+                    self._stt_audio_ms = self._checked_usage_add(
+                        self._stt_audio_ms, speech_ms, MAX_CONTROL_DURATION_MS
+                    )
+                    self._stt_billed_turns.add(event_turn_id)
+                elif event_turn_id in self._vad_started_at:
+                    self._vad_started_at.pop(event_turn_id, None)
+                    self._drop_pricing_fact()
                 if active is not None:
                     # A turn with no playback at all (e.g. a zero-clause driver
                     # reply) never sees a terminal finished event: reap and
@@ -326,8 +429,24 @@ class VoiceSession:
                     clock_start=self.clock.monotonic(),
                 )
                 self._set_state(TurnState.THINKING)
-                turn_body = self._run_driver_turn if self.driver else self._run_turn
-                active.task = asyncio.create_task(turn_body(active))
+                if self.driver is not None:
+                    context = TurnContext(
+                        payload={"user_text": active.user_text},
+                        session_id=self.session_id,
+                        turn_id=active.turn_id,
+                        clock=self.clock,
+                        rag_dispatch_observer=partial(
+                            self._record_rag_dispatch, active
+                        ),
+                        mcp_dispatch_observer=partial(
+                            self._record_mcp_dispatch, active
+                        ),
+                    )
+                    active.task = asyncio.create_task(
+                        self._run_driver_turn(active, context)
+                    )
+                else:
+                    active.task = asyncio.create_task(self._run_turn(active))
 
             elif isinstance(payload, TtsPlayback) and active is not None:
                 active.playbacks.append(payload)
@@ -335,9 +454,17 @@ class VoiceSession:
                 if active.planner is not None:
                     active.planner.record_playback(payload)
                 if payload.state == "started":
-                    active.speak_started_ms = event.envelope.ts_ms
+                    active.playback_started_ms.setdefault(
+                        payload.utterance_id, event.envelope.ts_ms
+                    )
+                    if not active.speak_started_ms:
+                        active.speak_started_ms = event.envelope.ts_ms
                     self._set_state(TurnState.SPEAKING)
-                elif payload.state == "finished":
+                elif payload.state in ("finished", "flushed"):
+                    self._record_playback_duration(
+                        active, payload, event.envelope.ts_ms
+                    )
+                if payload.state == "finished":
                     # Multi-clause turns (card 64): only the LAST registered
                     # utterance's finished playback ends the turn; earlier
                     # clauses' finishes are recorded (above) but not terminal.
@@ -345,17 +472,13 @@ class VoiceSession:
                         payload.utterance_id
                     ):
                         active.ended_ms = event.envelope.ts_ms
-                        active.tts_ms = event.envelope.ts_ms - active.speak_started_ms
                         active.playback_finished.set()
                         await self._await_task(active)
                         await self._complete(active, tree, records)
                         self._set_state(TurnState.IDLE)
                         active = None
 
-            elif isinstance(payload, (BargeIn, VadSpeechStart)) and active is not None:
-                # Both interrupt an in-flight turn: BargeIn = caller talks over the
-                # agent's speech; VadSpeechStart = caller starts a new utterance
-                # while the agent is still thinking/speaking (ADR 0011 spec).
+            elif isinstance(payload, BargeIn) and active is not None:
                 if self.state in (TurnState.THINKING, TurnState.SPEAKING):
                     await self._interrupt(active, event.envelope.ts_ms, tree, records)
                     active = None
@@ -374,8 +497,18 @@ class VoiceSession:
         if self._background_tasks:
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
 
+        incomplete_vad_facts = len(self._vad_started_at) + len(
+            self._pending_stt_speech_ms
+        )
+        for _ in range(incomplete_vad_facts):
+            self._drop_pricing_fact()
+        self._vad_started_at.clear()
+        self._pending_stt_speech_ms.clear()
+        self._stt_billed_turns.clear()
+
         tree.end_session(last_ts)
         tree.emit(self.tracer)
+        self._emit_session_cost(started_ts, last_ts)
         self.spans = list(tree.spans)
         return records
 
@@ -444,8 +577,10 @@ class VoiceSession:
                 elif isinstance(event, TurnDriverReport):
                     turn.assistant_text = event.assistant_text
                     turn.llm_ms = event.llm_ms
-                    turn.llm_cost = event.llm_cost
                     turn.mcp_tools_ms = event.mcp_tools_ms
+                    turn.mcp_tool_calls = max(turn.mcp_tool_calls, event.mcp_tool_calls)
+                    turn.rag_requests = max(turn.rag_requests, event.rag_requests)
+                    turn.usage = event.usage
         finally:
             if context is None or not context.speculative:
                 await self._send_stream_end(turn)
@@ -471,15 +606,27 @@ class VoiceSession:
             ),
             utterance,
         )
+        self._tts_characters = self._checked_usage_add(
+            self._tts_characters, len(utterance.text), MAX_USAGE_UNITS
+        )
 
     async def _retrieve_rag(self, turn: _ActiveTurn) -> None:
         if self.rag is None:
             return
         started = self.clock.monotonic()
-        result = await self.rag.prefetch(turn.user_text)
+        result = await self._priced_rag_prefetch(turn.user_text)
         turn.rag_ms = (self.clock.monotonic() - started) * 1000.0
         turn.rag_cache_hit = result.cache_hit
         turn.rag_result = result
+
+    async def _priced_rag_prefetch(self, query: str) -> RagResult:
+        assert self.rag is not None
+        if not self.rag.is_cached(query):
+            self._rag_requests = self._checked_usage_add(
+                self._rag_requests, 1, MAX_USAGE_UNITS
+            )
+        result = await self.rag.prefetch(query)
+        return result
 
     async def _interrupt(
         self,
@@ -504,8 +651,13 @@ class VoiceSession:
         # Only a turn that actually began SPEAKING has a TTS slice; interrupting
         # during THINKING leaves speak_started_ms at 0, so guard the subtraction
         # (an absolute timestamp here would corrupt the waterfall).
-        if turn.speak_started_ms:
-            turn.tts_ms = max(turn.tts_ms, ts_ms - turn.speak_started_ms)
+        for started_ms in turn.playback_started_ms.values():
+            turn.tts_ms = self._checked_usage_add(
+                turn.tts_ms,
+                max(0, ts_ms - started_ms),
+                MAX_CONTROL_DURATION_MS,
+            )
+        turn.playback_started_ms.clear()
         await self._cancel_task(turn)
         # A task cancelled before its first run never executes its finally, so
         # its stream-end barrier was never sent - send it here (exactly-once is
@@ -518,6 +670,31 @@ class VoiceSession:
         self, turn: _ActiveTurn, tree: TurnSpanTree, records: List[TurnRecord]
     ) -> None:
         record = self._finalize(turn, tree)
+        if turn.usage is not None:
+            self._llm_prompt_tokens = self._checked_usage_add(
+                self._llm_prompt_tokens,
+                turn.usage.prompt_tokens,
+                MAX_USAGE_UNITS,
+            )
+            self._llm_cached_prompt_tokens = self._checked_usage_add(
+                self._llm_cached_prompt_tokens,
+                turn.usage.cached_prompt_tokens,
+                MAX_USAGE_UNITS,
+            )
+            self._llm_completion_tokens = self._checked_usage_add(
+                self._llm_completion_tokens,
+                turn.usage.completion_tokens,
+                MAX_USAGE_UNITS,
+            )
+        self._mcp_tool_calls = self._checked_usage_add(
+            self._mcp_tool_calls, turn.mcp_tool_calls, MAX_USAGE_UNITS
+        )
+        self._rag_requests = self._checked_usage_add(
+            self._rag_requests, turn.rag_requests, MAX_USAGE_UNITS
+        )
+        self._tts_audio_ms = self._checked_usage_add(
+            self._tts_audio_ms, max(0, turn.tts_ms), MAX_CONTROL_DURATION_MS
+        )
         turn.record = record
         records.append(record)
         self._history.append(LlmMessage(role="user", content=record.user_text))
@@ -563,6 +740,16 @@ class VoiceSession:
 
         task.add_done_callback(_finish)
 
+    def _record_mcp_dispatch(self, turn: _ActiveTurn) -> None:
+        turn.mcp_tool_calls = self._checked_usage_add(
+            turn.mcp_tool_calls, 1, MAX_USAGE_UNITS
+        )
+
+    def _record_rag_dispatch(self, turn: _ActiveTurn) -> None:
+        turn.rag_requests = self._checked_usage_add(
+            turn.rag_requests, 1, MAX_USAGE_UNITS
+        )
+
     def _track_prefetch(self, task: asyncio.Task) -> None:
         self._prefetch_tasks.add(task)
 
@@ -583,9 +770,17 @@ class VoiceSession:
                 else turn.assistant_text
             )
             duration_min = (self.clock.monotonic() - turn.clock_start) / 60.0
+            turn_usage = turn.usage or UsageReport(0, 0)
+            llm_cost = self.pricebook.calculate(
+                VoiceUsage(
+                    llm_prompt_tokens=turn_usage.prompt_tokens,
+                    llm_cached_prompt_tokens=turn_usage.cached_prompt_tokens,
+                    llm_completion_tokens=turn_usage.completion_tokens,
+                )
+            ).cost.llm_cost
             cost: Optional[CostBreakdown] = CostBreakdown(
-                llm_cost=turn.llm_cost,
-                billable_audio_minutes=max(duration_min, _MIN_BILLABLE_MINUTES),
+                llm_cost=llm_cost,
+                billable_audio_minutes=max(duration_min, MIN_BILLABLE_AUDIO_MINUTES),
             )
         else:
             assistant_text = (
@@ -612,6 +807,64 @@ class VoiceSession:
             cost=cost,
             rag_cache_hit=turn.rag_cache_hit,
         )
+
+    def _emit_session_cost(self, started_ms: int, ended_ms: int) -> None:
+        duration_ms = ended_ms - started_ms
+        if not 0 <= duration_ms <= MAX_CONTROL_DURATION_MS:
+            self._drop_pricing_fact()
+            return
+        try:
+            duration_minutes = duration_ms / 60_000.0
+            usage = VoiceUsage(
+                llm_prompt_tokens=self._llm_prompt_tokens,
+                llm_cached_prompt_tokens=self._llm_cached_prompt_tokens,
+                llm_completion_tokens=self._llm_completion_tokens,
+                stt_audio_ms=self._stt_audio_ms,
+                tts_characters=self._tts_characters,
+                tts_audio_ms=self._tts_audio_ms,
+                telephony_minutes=duration_minutes,
+                telephony_direction=self.telephony_direction,
+                rag_requests=self._rag_requests,
+                mcp_tool_calls=self._mcp_tool_calls,
+                infra_minutes=duration_minutes,
+            )
+            priced_usage: PricedVoiceUsage = self.pricebook.calculate(usage)
+            if self.tracer.enabled:
+                self.tracer.cost(
+                    session_id=self.session_id,
+                    cost=priced_usage.cost,
+                    pricebook_version=self.pricebook.version,
+                    attribution=priced_usage.attribution,
+                )
+        except (OverflowError, ValueError):
+            self._drop_pricing_fact()
+
+    def _record_playback_duration(
+        self, turn: _ActiveTurn, playback: TtsPlayback, ended_ms: int
+    ) -> None:
+        started_ms = turn.playback_started_ms.pop(playback.utterance_id, None)
+        if started_ms is None and turn.playback_started_ms:
+            # The local gateway emits one start marker for the streamed response.
+            _, started_ms = turn.playback_started_ms.popitem()
+        if started_ms is None:
+            if playback.state != "flushed":
+                self._drop_pricing_fact()
+            return
+        turn.tts_ms = self._checked_usage_add(
+            turn.tts_ms,
+            max(0, ended_ms - started_ms),
+            MAX_CONTROL_DURATION_MS,
+        )
+
+    def _checked_usage_add(self, current: int, incoming: int, limit: int) -> int:
+        if incoming < 0 or current > limit - incoming:
+            self._drop_pricing_fact()
+            return current
+        return current + incoming
+
+    def _drop_pricing_fact(self) -> None:
+        if self.tracer.enabled:
+            self.tracer.dropped_events += 1
 
     def _record_spans(self, turn: _ActiveTurn, tree: TurnSpanTree) -> None:
         status = "cancelled" if turn.interrupted else "ok"

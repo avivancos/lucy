@@ -31,7 +31,7 @@ from lucy.llm import (
 )
 from lucy.mcp import McpClient
 from lucy.providers import LOCAL_PROVIDER_NAME, default_model_registry
-from lucy.settings import LatencyBudgets, LlmPricing
+from lucy.settings import LatencyBudgets
 from lucy.specs import AgentSpec, LucySpec, VoiceSpec
 from lucy.testing import (
     LocalMcpCommandTransport,
@@ -258,7 +258,7 @@ async def test_run_turn_emits_no_tts_speak_and_one_terminal_report():
     assert events[0].assistant_text == "Hello there."
 
 
-async def test_report_llm_ms_is_voice_to_voice_and_carries_cost():
+async def test_report_llm_ms_is_voice_to_voice_and_carries_usage():
     clock = ManualClock()
     simulator = LocalRealtimeSimulator([_turn()], clock, 10)
     driver = RealtimeTurnDriver(
@@ -267,12 +267,11 @@ async def test_report_llm_ms_is_voice_to_voice_and_carries_cost():
         default_model_registry(),
         clock,
         LatencyBudgets(),
-        pricing=LlmPricing(prompt_per_1k=0.01, completion_per_1k=0.02),
     )
     task = asyncio.create_task(_events(driver))
     report = (await _finish(clock, task, 10))[0]
     assert report.llm_ms > 0
-    assert report.llm_cost == pytest.approx(10 / 1000 * 0.01 + 4 / 1000 * 0.02)
+    assert report.usage == UsageReport(prompt_tokens=10, completion_tokens=4)
 
 
 def test_resolve_realtime_rejects_model_without_realtime_capability():
@@ -295,6 +294,7 @@ async def test_realtime_tool_round_executes_via_mcp_executor_with_audit():
 
     report = (await _events(driver))[0]
     assert report.assistant_text == "Checking. Booked."
+    assert report.mcp_tool_calls == 1
     assert client.audit_log[0].allowed
     assert simulator.session.received_tool_results[0].ok
 
@@ -315,7 +315,8 @@ async def test_realtime_tool_rounds_capped_by_typed_budget():
         tools=[tool],
         budgets=LatencyBudgets(max_tool_rounds_per_turn=2),
     )
-    await _events(driver)
+    report = (await _events(driver))[0]
+    assert report.mcp_tool_calls == 2
     assert [
         result.error_kind for result in simulator.session.received_tool_results
     ] == [

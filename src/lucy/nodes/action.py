@@ -119,10 +119,12 @@ class LlmNode:
                 "last_turn_report": {
                     "assistant_text": assistant_text,
                     "llm_ms": llm_ms,
-                    "llm_cost": 0.0,
                     "mcp_tools_ms": 0.0,
                     "prompt_tokens": usage.prompt_tokens if usage else 0,
                     "completion_tokens": usage.completion_tokens if usage else 0,
+                    "cached_prompt_tokens": usage.cached_prompt_tokens if usage else 0,
+                    "mcp_tool_calls": 0,
+                    "rag_requests": 0,
                 },
             },
         }
@@ -143,8 +145,29 @@ class McpToolNode:
         self.name = "tool_%s_%s" % (tool.server, tool.name)
 
     async def __call__(self, state: ConversationState, ctx: TurnContext) -> StateUpdate:
-        result = await self.executor.execute(self.tool, self.arguments(state))
-        return {"tool_results": [*state.tool_results, asdict(result)]}
+        dispatched = False
+
+        def record_dispatch() -> None:
+            nonlocal dispatched
+            dispatched = True
+            if ctx.mcp_dispatch_observer is not None:
+                ctx.mcp_dispatch_observer()
+
+        result = await self.executor.execute(
+            self.tool,
+            self.arguments(state),
+            on_dispatch=record_dispatch,
+        )
+        return {
+            "tool_results": [*state.tool_results, asdict(result)],
+            "agent_state": {
+                **state.agent_state,
+                "current_mcp_tool_calls": int(
+                    state.agent_state.get("current_mcp_tool_calls", 0)
+                )
+                + int(dispatched),
+            },
+        }
 
 
 class SayNode:

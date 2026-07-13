@@ -3,7 +3,7 @@ from typing import cast
 
 import pytest
 
-from lucy.clock import ManualClock, MonotonicClock
+from lucy.clock import ManualClock
 from lucy.llm import (
     LlmMessage,
     LlmRequest,
@@ -190,15 +190,15 @@ async def test_simulator_streams_tool_call_then_scripted_followup():
     assert isinstance(events2[-1], StreamEnd) and events2[-1].finish_reason == "stop"
 
 
-async def test_deadline_yields_timeout_result():
-    class BlockingTransport:  # real transport that never returns (ADR 0003), not a mock
-        async def call_tool(self, server, tool, arguments):
-            await asyncio.Event().wait()
+class ImmediateTimeoutTransport:
+    async def call_tool(self, server, tool, arguments):
+        raise asyncio.TimeoutError
 
-    client = McpClient(BlockingTransport(), allowed_tools=["crm.slow"])
-    executor = McpToolExecutor(
-        client, MonotonicClock()
-    )  # real clock: deadline is wall time
+
+async def test_deadline_yields_timeout_result():
+
+    client = McpClient(ImmediateTimeoutTransport(), allowed_tools=["crm.slow"])
+    executor = McpToolExecutor(client, ManualClock())
     tool = _tool(server="crm", name="slow", deadline_ms=1)
 
     result = await executor.execute(tool, {})
@@ -323,6 +323,8 @@ async def test_tool_call_mid_stream_speaks_one_filler_and_completes_round():
     assert tts[0].text in _FILLER_STRINGS  # filler spoken before the answer clause
     report = next(e for e in events if isinstance(e, TurnDriverReport))
     assert report.assistant_text == "Booked."  # follow-up answer completed the round
+    assert report.usage == UsageReport(3, 1)
+    assert report.mcp_tool_calls == 1
     assert transport.commands[0]["tool"] == "book_meeting"  # tool actually executed
 
 
@@ -390,6 +392,8 @@ async def test_tool_rounds_capped_by_typed_budget():
     report = next(e for e in events if isinstance(e, TurnDriverReport))
 
     assert report.assistant_text == "All done."  # turn still ends with spoken text
+    assert report.usage == UsageReport(5, 2)
+    assert report.mcp_tool_calls == 2
     assert len(transport.commands) == 2  # exactly max_tool_rounds_per_turn executions
     tool_msgs = [m for msgs in recorder.requests for m in msgs if m.role == "tool"]
     assert any('"error_kind": "budget"' in m.content for m in tool_msgs)  # 3rd refused
@@ -422,6 +426,7 @@ async def test_unknown_tool_name_yields_unknown_tool_result_no_execution():
     report = next(e for e in events if isinstance(e, TurnDriverReport))
 
     assert report.assistant_text == "Sorry, unavailable."  # recovered verbally
+    assert report.mcp_tool_calls == 0
     assert transport.commands == []  # unknown tool never executed
     assert client.audit_log == []  # no client call -> no audit entry
     tool_msgs = [m for msgs in recorder.requests for m in msgs if m.role == "tool"]
@@ -478,6 +483,7 @@ async def test_denied_tool_recovers_verbally_audited_no_crash():
     report = next(e for e in events if isinstance(e, TurnDriverReport))
 
     assert report.assistant_text == "Sorry, I can't do that."  # verbal recovery
+    assert report.mcp_tool_calls == 0
     assert client.audit_log[-1].allowed is False  # denial was audited
 
 
@@ -495,14 +501,8 @@ async def test_timeout_recovers_verbally():
         token_interval_ms=0,
     )
 
-    class BlockingTransport:  # real transport that never returns (ADR 0003)
-        async def call_tool(self, server, tool, arguments):
-            await asyncio.Event().wait()
-
-    client = McpClient(BlockingTransport(), allowed_tools=["crm.slow"])
-    executor = McpToolExecutor(
-        client, MonotonicClock()
-    )  # real clock: wall-time deadline
+    client = McpClient(ImmediateTimeoutTransport(), allowed_tools=["crm.slow"])
+    executor = McpToolExecutor(client, clock)
     tool = _tool(server="crm", name="slow", deadline_ms=1)
     driver = _mk_driver(clock, sim, tools=[tool], executor=executor)
 
@@ -510,4 +510,5 @@ async def test_timeout_recovers_verbally():
     report = next(e for e in events if isinstance(e, TurnDriverReport))
 
     assert report.assistant_text == "That took too long."  # verbal recovery
+    assert report.mcp_tool_calls == 1
     assert client.audit_log[-1].error == "deadline exceeded"

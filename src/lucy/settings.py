@@ -49,10 +49,22 @@ class GraphLimits(BaseSettings):
 
 
 class LlmPricing(BaseSettings):
-    """Per-1k-token prices for cost accounting. Zero defaults - no invented
-    prices; override from the environment with the ``LUCY_LLM_PRICE_`` prefix."""
+    """Compatibility input for pre-card-66 driver construction.
+
+    Arithmetic is delegated to ``PriceBook``; new code injects one price book
+    into ``VoiceSession`` instead.
+    """
 
     model_config = SettingsConfigDict(env_prefix="LUCY_LLM_PRICE_", extra="ignore")
 
     prompt_per_1k: float = 0.0
     completion_per_1k: float = 0.0
+
+    def as_pricebook(self):
+        from lucy.pricing import PriceBook
+
+        return PriceBook(
+            version="legacy-llm-pricing",
+            llm_prompt_per_1k=self.prompt_per_1k,
+            llm_completion_per_1k=self.completion_per_1k,
+        )

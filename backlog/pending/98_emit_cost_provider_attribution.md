@@ -15,7 +15,7 @@ emitting the provider/model responsible for each reported cost component.
 
 - `agents.md` - operating, no-mocks, typed-config, and commit rules.
 - `docs/telemetry-wire-v1.md` - additive wire-v1 cost contract.
-- `backlog/pending/66_voice_pricing_registry_and_cost_roundout.md` - source of
+- `backlog/done/66_voice_pricing_registry_and_cost_roundout.md` - source of
   complete seven-component cost events and price-book attribution.
 - `src/lucy/observe/events.py` - typed cost telemetry event.
 - `src/lucy/providers.py` - resolved provider/model identities.

@@ -305,8 +305,12 @@ def _empty_context_update(state: ConversationState) -> Dict[str, Any]:
         "prompt_context": "",
         "grounding_ids": [],
         "rag_deadline_exceeded": False,
+        "current_rag_requests": 0,
     }
     return {"agent_state": agent_state}
+
+
+RAG_DISPATCH_COUNT_PAYLOAD_KEY = "_lucy_rag_dispatch_count"
 
 
 def default_agent_graph(
@@ -322,6 +326,10 @@ def default_agent_graph(
         user_text = str(ctx.payload.get("user_text", ""))
         if rag is None:
             return _empty_context_update(state)
+        dispatched = not rag.is_cached(user_text)
+        ctx.payload[RAG_DISPATCH_COUNT_PAYLOAD_KEY] = int(dispatched)
+        if dispatched and ctx.rag_dispatch_observer is not None:
+            ctx.rag_dispatch_observer()
         result = await rag.prefetch(user_text)
         ctx.payload[RAG_RESULT_PAYLOAD_KEY] = result
         agent_state = {
@@ -329,6 +337,7 @@ def default_agent_graph(
             "prompt_context": result.prompt_context,
             "grounding_ids": [chunk.grounding_id for chunk in result.chunks],
             "rag_deadline_exceeded": result.deadline_exceeded,
+            "current_rag_requests": int(dispatched),
         }
         return {"agent_state": agent_state}
 
@@ -336,7 +345,11 @@ def default_agent_graph(
         state: ConversationState, ctx: TurnContext
     ) -> Dict[str, Any]:
         ctx.payload.pop(RAG_RESULT_PAYLOAD_KEY, None)
-        return _empty_context_update(state)
+        update = _empty_context_update(state)
+        update["agent_state"]["current_rag_requests"] = int(
+            ctx.payload.get(RAG_DISPATCH_COUNT_PAYLOAD_KEY, 0)
+        )
+        return update
 
     async def llm(state: ConversationState, ctx: TurnContext) -> Dict[str, Any]:
         user_text = str(ctx.payload.get("user_text", ""))
@@ -345,7 +358,6 @@ def default_agent_graph(
             assistant_text="",
             llm_ms=0.0,
             usage=None,
-            llm_cost=0.0,
         )
         history = _history_from_state(state)
         if ctx.current_user_in_state and history and history[-1].role == "user":
@@ -375,8 +387,17 @@ def default_agent_graph(
             "last_turn_report": {
                 "assistant_text": terminal.assistant_text,
                 "llm_ms": terminal.llm_ms,
-                "llm_cost": terminal.llm_cost,
                 "mcp_tools_ms": terminal.mcp_tools_ms,
+                "prompt_tokens": terminal.usage.prompt_tokens if terminal.usage else 0,
+                "completion_tokens": (
+                    terminal.usage.completion_tokens if terminal.usage else 0
+                ),
+                "cached_prompt_tokens": (
+                    terminal.usage.cached_prompt_tokens if terminal.usage else 0
+                ),
+                "mcp_tool_calls": terminal.mcp_tool_calls,
+                "rag_requests": terminal.rag_requests
+                + int(state.agent_state.get("current_rag_requests", 0)),
             },
         }
         return {"transcript": transcript, "agent_state": agent_state}

@@ -42,6 +42,7 @@ from lucy.llm import (
     UsageReport,
     resolve_llm,
 )
+from lucy.limits import MAX_USAGE_UNITS
 from lucy.providers import (
     LOCAL_PROVIDER_NAME,
     Capability,
@@ -49,6 +50,7 @@ from lucy.providers import (
     ModelRegistry,
     parse_spec_string,
 )
+from lucy.pricing import PriceBook, VoiceUsage
 from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, LlmPricing
 from lucy.speech import MIN_FLUSH_CHARS, SentenceAssembler, TtsPlanner
@@ -69,9 +71,44 @@ class TurnDriverReport:
     usage: Optional[UsageReport]
     llm_cost: float = 0.0
     mcp_tools_ms: float = 0.0
+    mcp_tool_calls: int = 0
+    rag_requests: int = 0
 
 
 DriverEvent = Union[TtsSpeak, TurnDriverReport]
+
+
+def _combine_usage(
+    current: Optional[UsageReport], incoming: UsageReport
+) -> UsageReport:
+    if current is None:
+        return incoming
+    return UsageReport(
+        prompt_tokens=min(
+            MAX_USAGE_UNITS, current.prompt_tokens + incoming.prompt_tokens
+        ),
+        completion_tokens=min(
+            MAX_USAGE_UNITS, current.completion_tokens + incoming.completion_tokens
+        ),
+        cached_prompt_tokens=min(
+            MAX_USAGE_UNITS,
+            current.cached_prompt_tokens + incoming.cached_prompt_tokens,
+        ),
+    )
+
+
+def _legacy_llm_cost(
+    pricebook: Optional[PriceBook], usage: Optional[UsageReport]
+) -> float:
+    if usage is None or pricebook is None:
+        return 0.0
+    return pricebook.calculate(
+        VoiceUsage(
+            llm_prompt_tokens=usage.prompt_tokens,
+            llm_cached_prompt_tokens=usage.cached_prompt_tokens,
+            llm_completion_tokens=usage.completion_tokens,
+        )
+    ).cost.llm_cost
 
 
 @dataclass(frozen=True)
@@ -178,7 +215,7 @@ class CascadedTurnDriver:
         self._model = model
         self._clock = clock
         self._budgets = budgets  # caps tool rounds via max_tool_rounds_per_turn
-        self._pricing = pricing
+        self.pricebook = pricing.as_pricebook() if pricing is not None else None
         self._min_flush = min_flush_chars
         self._tool_executor = tool_executor
         self._tools_by_name: Dict[str, ToolDef] = {t.name: t for t in tools}
@@ -213,7 +250,19 @@ class CascadedTurnDriver:
         usage: Optional[UsageReport] = None
         llm_ms = 0.0  # LLM streaming time only (excludes tool execution)
         mcp_tools_ms = 0.0
+        mcp_tool_calls = 0
         rounds = 0
+
+        def record_mcp_dispatch() -> None:
+            nonlocal mcp_tool_calls
+            mcp_tool_calls += 1
+            observer = (
+                turn_context.mcp_dispatch_observer
+                if isinstance(turn_context, TurnContext)
+                else None
+            )
+            if observer is not None:
+                observer()
 
         while True:
             request = LlmRequest(
@@ -244,7 +293,7 @@ class CascadedTurnDriver:
                         buffered_at_call = assembler.has_buffered()
                     # ToolCallDelta: final args arrive on ToolCallReady; nothing here
                 elif isinstance(event, UsageReport):
-                    usage = event
+                    usage = _combine_usage(usage, event)
                 elif isinstance(event, StreamEnd):
                     for clause in assembler.finalize():
                         yield planner.plan(clause)
@@ -277,7 +326,11 @@ class CascadedTurnDriver:
                 # Execute CONCURRENTLY with the filler: schedule the task, speak
                 # the filler while it runs, then await the result.
                 exec_task = asyncio.create_task(
-                    self._tool_executor.execute(tool, dict(tool_ready.arguments)),
+                    self._tool_executor.execute(
+                        tool,
+                        dict(tool_ready.arguments),
+                        on_dispatch=record_mcp_dispatch,
+                    ),
                     name="tool:%s" % tool.key,
                 )
                 if filler_text is not None:
@@ -299,16 +352,10 @@ class CascadedTurnDriver:
             assistant_text=assistant_text,
             llm_ms=llm_ms,
             usage=usage,
-            llm_cost=self._cost(usage),
+            llm_cost=_legacy_llm_cost(self.pricebook, usage),
             mcp_tools_ms=mcp_tools_ms,
+            mcp_tool_calls=mcp_tool_calls,
         )
-
-    def _cost(self, usage: Optional[UsageReport]) -> float:
-        if usage is None or self._pricing is None:
-            return 0.0
-        return (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k + (
-            usage.completion_tokens / 1000.0
-        ) * self._pricing.completion_per_1k
 
 
 def resolve_realtime(registry: ModelRegistry, provider: str, model: str) -> ModelInfo:
@@ -360,7 +407,7 @@ class RealtimeTurnDriver:
         self._tool_executor = tool_executor
         self._tools_by_name = {tool.name: tool for tool in tools}
         self._hooks = hooks
-        self._pricing = pricing
+        self.pricebook = pricing.as_pricebook() if pricing is not None else None
         self._session: Optional[RealtimeSession] = None
         self.last_voiced_text = ""
 
@@ -376,14 +423,27 @@ class RealtimeTurnDriver:
         *,
         turn_context: object | None = None,
     ) -> AsyncIterator[DriverEvent]:
-        del history, turn_context
+        del history
         session = await self._open()
         self.last_voiced_text = ""
         usage: Optional[UsageReport] = None
         assistant_done: Optional[RealtimeAssistantDone] = None
         mcp_tools_ms = 0.0
+        mcp_tool_calls = 0
         rounds = 0
         started = self._clock.monotonic()
+
+        def record_mcp_dispatch() -> None:
+            nonlocal mcp_tool_calls
+            mcp_tool_calls += 1
+            observer = (
+                turn_context.mcp_dispatch_observer
+                if isinstance(turn_context, TurnContext)
+                else None
+            )
+            if observer is not None:
+                observer()
+
         for pre_hook in self._hooks.pre_turn:
             await pre_hook(user_text)
         try:
@@ -407,7 +467,9 @@ class RealtimeTurnDriver:
                         )
                     else:
                         result = await self._tool_executor.execute(
-                            tool, dict(event.arguments)
+                            tool,
+                            dict(event.arguments),
+                            on_dispatch=record_mcp_dispatch,
                         )
                         mcp_tools_ms += result.elapsed_ms
                     await session.send_tool_result(result)
@@ -424,19 +486,13 @@ class RealtimeTurnDriver:
             assistant_text=assistant_done.full_text,
             llm_ms=(self._clock.monotonic() - started) * 1000.0,
             usage=usage,
-            llm_cost=self._cost(usage),
+            llm_cost=_legacy_llm_cost(self.pricebook, usage),
             mcp_tools_ms=mcp_tools_ms,
+            mcp_tool_calls=mcp_tool_calls,
         )
         for post_hook in self._hooks.post_turn:
             await post_hook(report)
         yield report
-
-    def _cost(self, usage: Optional[UsageReport]) -> float:
-        if usage is None or self._pricing is None:
-            return 0.0
-        return (usage.prompt_tokens / 1000.0) * self._pricing.prompt_per_1k + (
-            usage.completion_tokens / 1000.0
-        ) * self._pricing.completion_per_1k
 
     async def aclose(self) -> None:
         if self._session is not None:
@@ -483,7 +539,12 @@ class GraphTurnDriver:
                 "transcript": [
                     *self.state.transcript,
                     TranscriptLine(speaker="caller", text=user_text),
-                ]
+                ],
+                "agent_state": {
+                    **self.state.agent_state,
+                    "current_mcp_tool_calls": 0,
+                    "current_rag_requests": 0,
+                },
             }
         )
         queue: "asyncio.Queue[TtsSpeak]" = asyncio.Queue()
@@ -512,6 +573,16 @@ class GraphTurnDriver:
                 outer_context.promoted if outer_context is not None else asyncio.Event()
             ),
             current_user_in_state=True,
+            rag_dispatch_observer=(
+                outer_context.rag_dispatch_observer
+                if outer_context is not None
+                else None
+            ),
+            mcp_dispatch_observer=(
+                outer_context.mcp_dispatch_observer
+                if outer_context is not None
+                else None
+            ),
         )
         task = asyncio.create_task(self.graph.invoke_turn(working_state, ctx))
         final_state: Optional[ConversationState] = None
@@ -665,12 +736,26 @@ class GraphTurnDriver:
                 line.text for line in state.transcript if line.speaker == "agent"
             ]
             assistant_text = agent_lines[-1] if agent_lines else ""
+        prompt_tokens = int(report.get("prompt_tokens", 0))
+        completion_tokens = int(report.get("completion_tokens", 0))
+        cached_prompt_tokens = int(report.get("cached_prompt_tokens", 0))
+        usage = (
+            UsageReport(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_prompt_tokens=cached_prompt_tokens,
+            )
+            if prompt_tokens or completion_tokens or cached_prompt_tokens
+            else None
+        )
         return TurnDriverReport(
             assistant_text=assistant_text,
             llm_ms=float(report.get("llm_ms", 0.0)),
-            usage=None,
-            llm_cost=float(report.get("llm_cost", 0.0)),
+            usage=usage,
             mcp_tools_ms=float(report.get("mcp_tools_ms", 0.0)),
+            mcp_tool_calls=int(report.get("mcp_tool_calls", 0))
+            + int(state.agent_state.get("current_mcp_tool_calls", 0)),
+            rag_requests=int(report.get("rag_requests", 0)),
         )
 
     @classmethod

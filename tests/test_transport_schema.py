@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from lucy.limits import MAX_CONTROL_DURATION_MS, MAX_CONTROL_TIMESTAMP_MS
 from lucy.transport.schema import (
     ENVELOPE_FIELDS,
     MESSAGE_TYPES,
@@ -17,6 +18,8 @@ from lucy.transport.schema import (
     TtsPlayback,
     TtsSpeak,
     UnknownControlMessage,
+    VadSpeechEnd,
+    VadSpeechStart,
     parse_event,
     to_wire,
 )
@@ -88,6 +91,22 @@ def test_stability_and_state_are_constrained():
         TtsPlayback(utterance_id="u", state="bogus", mark_chars=0)  # literal
     with pytest.raises(ValidationError):
         BargeIn(at_ms=1, during="dancing", utterance_id=None)  # literal
+
+
+@pytest.mark.parametrize("value", [-1, True, MAX_CONTROL_TIMESTAMP_MS + 1])
+def test_control_timestamps_reject_ambiguous_or_unbounded_values(value):
+    with pytest.raises(ValidationError):
+        Envelope(type="vad.speech_start", session_id="s", seq=1, ts_ms=value)
+    with pytest.raises(ValidationError):
+        VadSpeechStart(at_ms=value)
+
+
+@pytest.mark.parametrize("value", [-1, True, MAX_CONTROL_DURATION_MS + 1])
+def test_control_durations_reject_ambiguous_or_unbounded_values(value):
+    with pytest.raises(ValidationError):
+        VadSpeechEnd(at_ms=1, speech_ms=value)
+    with pytest.raises(ValidationError):
+        SttFinal(text="hello", provider="local", stt_ms=value)
 
 
 def test_session_started_features_are_additive_and_default_empty():

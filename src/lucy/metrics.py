@@ -12,6 +12,8 @@ from lucy.specs import FunnelStage, SentimentLabel
 if TYPE_CHECKING:
     from lucy.observe import Tracer
 
+MIN_BILLABLE_AUDIO_MINUTES = 1e-9
+
 
 class CostBreakdown(BaseModel):
     stt_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)

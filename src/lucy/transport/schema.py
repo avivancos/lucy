@@ -14,6 +14,11 @@ from typing import Annotated, Dict, List, Literal, NamedTuple, Optional, Type
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from lucy.limits import MAX_CONTROL_DURATION_MS, MAX_CONTROL_TIMESTAMP_MS
+
+ControlTimestamp = Annotated[int, Field(strict=True, ge=0, le=MAX_CONTROL_TIMESTAMP_MS)]
+ControlDuration = Annotated[int, Field(strict=True, ge=0, le=MAX_CONTROL_DURATION_MS)]
+
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -25,7 +30,7 @@ class Envelope(_Strict):
     session_id: str
     turn_id: Optional[str] = None
     seq: int
-    ts_ms: int
+    ts_ms: ControlTimestamp
 
 
 ENVELOPE_FIELDS = frozenset(Envelope.model_fields)
@@ -42,12 +47,12 @@ class SessionStarted(_Strict):
 
 
 class VadSpeechStart(_Strict):
-    at_ms: int
+    at_ms: ControlTimestamp
 
 
 class VadSpeechEnd(_Strict):
-    at_ms: int
-    speech_ms: int
+    at_ms: ControlTimestamp
+    speech_ms: ControlDuration
 
 
 class SttPartial(_Strict):
@@ -59,7 +64,7 @@ class SttPartial(_Strict):
 class SttFinal(_Strict):
     text: str
     provider: str
-    stt_ms: int
+    stt_ms: ControlDuration
 
 
 class Dtmf(_Strict):
@@ -78,7 +83,7 @@ class TtsPlayback(_Strict):
 
 
 class BargeIn(_Strict):
-    at_ms: int
+    at_ms: ControlTimestamp
     during: Literal["speaking", "thinking"]
     utterance_id: Optional[str] = None
 

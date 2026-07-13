@@ -14,12 +14,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
+from lucy.limits import MAX_PRICEBOOK_VERSION_LENGTH, MAX_USAGE_UNITS
 from lucy.metrics import CostBreakdown, LatencyWaterfall
 from lucy.privacy import contains_sensitive_text
 from lucy.transport.schema import OpaqueRecordingRef, RecordingContainer
 
 WIRE_VERSION = "1"
 NonEmptyString = Annotated[str, Field(min_length=1)]
+NonNegativeFiniteFloat = Annotated[
+    float, Field(ge=0.0, le=MAX_USAGE_UNITS, allow_inf_nan=False)
+]
+CostAttributionKey = Annotated[str, Field(min_length=1, max_length=64)]
+PriceBookVersion = Annotated[
+    str, Field(min_length=1, max_length=MAX_PRICEBOOK_VERSION_LENGTH)
+]
 
 
 class TelemetryEventBase(BaseModel):
@@ -86,6 +94,10 @@ class CostEvent(TelemetryEventBase):
     type: Literal["cost"] = "cost"
     cost: CostBreakdown
     turn_id: Optional[str] = None
+    pricebook_version: Optional[PriceBookVersion] = None
+    attribution: Dict[CostAttributionKey, NonNegativeFiniteFloat] = Field(
+        default_factory=dict
+    )
 
     def to_wire(self) -> Dict[str, object]:
         data = super().to_wire()

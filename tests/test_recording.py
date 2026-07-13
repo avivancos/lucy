@@ -764,6 +764,8 @@ async def _late_recording_directive():
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
         stream = gateway.events()
         await stream.__anext__()
+        vad_start = await stream.__anext__()
+        assert vad_start.envelope.type == "vad.speech_start"
         partial = await stream.__anext__()
         assert partial.envelope.type == "stt.partial"
         await gateway.send(
