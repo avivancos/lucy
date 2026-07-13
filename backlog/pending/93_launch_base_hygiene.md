@@ -30,7 +30,8 @@ prove no public quickstart imports them.
 Resolve `.codex/` tracking with the user at execution time: either commit the
 needed app metadata like `.claude/`, or add a gitignore rule. Sweep older done
 cards whose `**State:**` header disagrees with their folder, without changing
-their review evidence.
+their review evidence. Refresh state-dependent open-card notes in
+`backlog/sprints.md` from the actual card folders during the same sweep.
 
 ## Files to create/modify
 
@@ -38,13 +39,14 @@ their review evidence.
 - `Dockerfile.api` - image command/import path.
 - `src/lucy/api/app.py` and `src/lucy/worker.py` - retire or reduce shims.
 - `.gitignore` or `.codex/` - one intentional decision.
+- `backlog/sprints.md` - state-dependent open-card note consistency.
 - `backlog/done/*.md` - state header consistency only if drift exists.
 
 ## Chips
 
 - [ ] **C1 - Runtime entrypoints.** Write or update tests that assert Compose and Dockerfile reference `lucy.serve`, then switch stale imports. Files: `docker-compose.yml`, `Dockerfile.api`, `tests/test_infrastructure.py`. Verify: `docker compose run --rm lucy-api pytest tests/test_infrastructure.py -q` -> infrastructure tests pass.
 - [ ] **C2 - Shim retirement.** Add import/quickstart compatibility tests, then retire deprecated API and worker shims where safe. Files: `src/lucy/api/app.py`, `src/lucy/worker.py`, `tests/test_api.py`. Verify: `docker compose run --rm lucy-api pytest tests/test_api.py -q` -> API tests pass.
-- [ ] **C3 - Hygiene gates.** Resolve `.codex/` tracking, sweep card state metadata if needed, run clean Docker build and full gates, then move the card. Files: `.gitignore`, `backlog/done/*.md`. Verify: `docker compose up --build` -> app boots from clean state.
+- [ ] **C3 - Hygiene gates.** Resolve `.codex/` tracking, sweep card state metadata and state-dependent sprint notes if needed, run clean Docker build and full gates, then move the card. Files: `.gitignore`, `backlog/sprints.md`, `backlog/done/*.md`. Verify: `docker compose up --build` -> app boots from clean state.
 
 ## Do NOT
 
