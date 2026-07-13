@@ -130,7 +130,7 @@ transport; `CloudTraceExporter` is the package's only public API:
   audio_ref) to wire-v1 dicts. Events arrive post-redaction from
   `lucy.observe`; no redaction logic here.
 
-Tests (no mocks) under `packages/lucy-cloud/tests/`:
+Tests (no mocks) under `packages/lucy-cloud/lucy_cloud_tests/`:
 
 - `ingest_app.py`: `create_ingest_app(api_key: str, *,
   rate_limit_after: int | None = None, retry_after: str = "0",
@@ -154,7 +154,7 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
 ## Chips
 
 - [x] **C1 - Package scaffold + entry point.** Write
-  `packages/lucy-cloud/tests/test_packaging.py` first:
+  `packages/lucy-cloud/lucy_cloud_tests/test_packaging.py` first:
   `test_entry_point_exposes_cloud_exporter_factory` loads entry-point group
   `lucy.exporters`, name `cloud`, and asserts it resolves to the bound
   `CloudTraceExporter.from_env` factory. Then create `packages/lucy-cloud/pyproject.toml`,
@@ -162,19 +162,19 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
   in `packages/lucy-cloud/src/lucy_cloud/exporter.py` (constructor
   signature only; behavior lands in C6). Verify:
   `.venv/bin/pip install -e packages/lucy-cloud && .venv/bin/python -m
-  pytest packages/lucy-cloud/tests/test_packaging.py -q` -> all pass.
+  pytest packages/lucy-cloud/lucy_cloud_tests/test_packaging.py -q` -> all pass.
 - [x] **C2 - Wire constants, envelope, batch planning.** Test first in
-  `packages/lucy-cloud/tests/test_wire.py`:
+  `packages/lucy-cloud/lucy_cloud_tests/test_wire.py`:
   `test_envelope_matches_wire_v1_shape`,
   `test_plan_batches_splits_at_max_events` (101 events -> 2 batches),
   `test_plan_batches_splits_at_max_bytes` (oversized payloads split
   under 1 MiB), `test_encode_batch_gzip_round_trips` (gzip body decodes
   to the same JSON; headers carry `x-lucy-wire: 1`). Implement
   `packages/lucy-cloud/src/lucy_cloud/_wire.py`. Verify:
-  `.venv/bin/python -m pytest packages/lucy-cloud/tests/test_wire.py -q`
+  `.venv/bin/python -m pytest packages/lucy-cloud/lucy_cloud_tests/test_wire.py -q`
   -> all pass (>=4 tests).
 - [x] **C3 - Ingest conformance fixture.** Test first in
-  `packages/lucy-cloud/tests/test_ingest_conformance.py`:
+  `packages/lucy-cloud/lucy_cloud_tests/test_ingest_conformance.py`:
   `test_valid_batch_accepted_with_202`,
   `test_missing_or_wrong_api_key_rejected_401`,
   `test_oversized_batch_rejected_413`,
@@ -184,12 +184,12 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
   `test_unknown_event_type_accepted_opaquely`. Drive via
   `httpx.AsyncClient` over `httpx.ASGITransport` locally and the configured
   external endpoint in conformance mode. Implement
-  `packages/lucy-cloud/tests/ingest_app.py`. Verify:
+  `packages/lucy-cloud/lucy_cloud_tests/ingest_app.py`. Verify:
   `.venv/bin/python -m pytest
-  packages/lucy-cloud/tests/test_ingest_conformance.py -q` -> all pass
+  packages/lucy-cloud/lucy_cloud_tests/test_ingest_conformance.py -q` -> all pass
   (>=7 tests).
 - [x] **C4 - Bounded queue + background flush.** Test first in
-  `packages/lucy-cloud/tests/test_client.py`:
+  `packages/lucy-cloud/lucy_cloud_tests/test_client.py`:
   `test_submit_never_blocks_when_queue_full_drops_and_counts`
   (tiny `max_queue` -> submission returns instantly,
   `dropped_events` grows), `test_flush_interval_sends_partial_batch`
@@ -198,10 +198,10 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
   `test_aclose_flushes_remaining_events`. Implement
   `packages/lucy-cloud/src/lucy_cloud/client.py` happy path against the
   C3 app via injected ASGI transport. Verify:
-  `.venv/bin/python -m pytest packages/lucy-cloud/tests/test_client.py
+  `.venv/bin/python -m pytest packages/lucy-cloud/lucy_cloud_tests/test_client.py
   -q` -> all pass in < 5 s (proves no real 2 s sleeps in tests).
 - [x] **C5 - Retry, idempotency, fail-open.** Test first, extending
-  `packages/lucy-cloud/tests/test_client.py`:
+  `packages/lucy-cloud/lucy_cloud_tests/test_client.py`:
   `test_5xx_retries_with_same_idempotency_key` (`fail_first_n=2` ->
   success on 3rd attempt, ingest stores the batch once),
   `test_429_honors_retry_after_then_succeeds`,
@@ -209,9 +209,9 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
   `test_unreachable_endpoint_drops_after_max_retries_without_raising`.
   Implement retry/backoff in `client.py` using `RETRY_BASE_S`/
   `RETRY_MAX_S`. Verify: `.venv/bin/python -m pytest
-  packages/lucy-cloud/tests/test_client.py -q` -> all pass.
+  packages/lucy-cloud/lucy_cloud_tests/test_client.py -q` -> all pass.
 - [x] **C6 - CloudTraceExporter.** Test first in
-  `packages/lucy-cloud/tests/test_exporter.py`:
+  `packages/lucy-cloud/lucy_cloud_tests/test_exporter.py`:
   `test_export_batch_delivers_wire_events_to_ingest` (TelemetryEvents in,
   wire-v1 dicts stored by `IngestState`),
   `test_from_env_returns_none_without_api_key`,
@@ -220,9 +220,9 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
   mock), `test_export_batch_never_raises_on_server_error`. Implement
   `packages/lucy-cloud/src/lucy_cloud/exporter.py` for real. Verify:
   `.venv/bin/python -m pytest
-  packages/lucy-cloud/tests/test_exporter.py -q` -> all pass.
+  packages/lucy-cloud/lucy_cloud_tests/test_exporter.py -q` -> all pass.
 - [x] **C7 - Auto-attach end-to-end.** Test first in
-  `packages/lucy-cloud/tests/test_autoattach.py`:
+  `packages/lucy-cloud/lucy_cloud_tests/test_autoattach.py`:
   `test_configure_attaches_cloud_exporter_when_api_key_set`,
   `test_configure_skips_cloud_exporter_without_api_key`,
   `test_session_events_reach_ingest_with_zero_code_changes` - run the
@@ -234,12 +234,12 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
   producer/privacy/runtime alignments authorized under Do NOT may update core.
   Verify:
   `.venv/bin/python -m pytest
-  packages/lucy-cloud/tests/test_autoattach.py -q` -> all pass.
+  packages/lucy-cloud/lucy_cloud_tests/test_autoattach.py -q` -> all pass.
 - [x] **C8 - Full suite + bookkeeping.** Run everything, fill
   "Improvements noted", collect review evidence, and prepare the final state
   move. Verify:
   `.venv/bin/python -m pytest -q && .venv/bin/python -m pytest
-  packages/lucy-cloud/tests -q` -> both green.
+  packages/lucy-cloud/lucy_cloud_tests -q` -> both green.
 
 ## Do NOT
 
@@ -283,9 +283,9 @@ Tests (no mocks) under `packages/lucy-cloud/tests/`:
 ## Definition of Done
 
 - [x] Docker editable `pip install -e packages/lucy-cloud` -> installs cleanly
-- [x] Docker pytest `packages/lucy-cloud/tests -q` -> all
+- [x] Docker pytest `packages/lucy-cloud/lucy_cloud_tests -q` -> all
       pass (packaging, wire, conformance, client, exporter, auto-attach)
-- [x] Docker pytest `packages/lucy-cloud/tests/test_autoattach.py -q` -> proves
+- [x] Docker pytest `packages/lucy-cloud/lucy_cloud_tests/test_autoattach.py -q` -> proves
       `LUCY_API_KEY` + `LUCY_ENDPOINT` yield cloud export with zero code
       changes
 - [x] `grep -rn "unittest.mock\|MagicMock\|respx\|responses" \
@@ -363,7 +363,7 @@ report. Partial honest work beats fake completion.
 - `security-reviewer` (`019f5b97-4087-7891-ba90-f1db3ba22b10`): PASS; exact
   runtime, project, recording-reference, recorder, replay, endpoint, approval,
   and shutdown probes found no remaining exposure.
-- Final Docker gates: `313 passed` for `packages/lucy-cloud/tests`; `577 passed,
+- Final Docker gates: `313 passed` for `packages/lucy-cloud/lucy_cloud_tests`; `577 passed,
   2 deselected` for the SDK; backlog contract `9 passed`; Ruff, format, mypy,
   no-mocks scan, and `git diff --check` clean.
 - Hosted external conformance was not run because no external endpoint

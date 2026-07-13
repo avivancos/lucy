@@ -7,7 +7,9 @@ import hashlib
 import io
 import uuid
 import wave
-from typing import Callable, Dict, List, Optional, Protocol
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Callable, Dict, List, Optional, Protocol, Union, runtime_checkable
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -23,7 +25,10 @@ from lucy.transport.schema import (
 )
 
 CONSENT_NOT_REQUIRED_REF = "consent-not-required"
-LOCAL_BLOB_CONTENT_TYPE = "audio/wav"
+RECORDING_CONTENT_TYPE = "audio/wav"
+RECORDING_UPLOAD_HEADERS = MappingProxyType(
+    {"content-type": RECORDING_CONTENT_TYPE, "if-none-match": "*"}
+)
 LOCAL_BLOB_MAX_BYTES = 10 * 1024 * 1024
 _OPAQUE_REF_ADAPTER = TypeAdapter(OpaqueRecordingRef)
 _UUID_DIGIT_TRANSLATION = str.maketrans("0123456789", "ghijklmnop")
@@ -41,8 +46,43 @@ class RecordingCleanupError(RuntimeError):
         self.errors = tuple(errors)
 
 
+class RecordingUnavailableError(RuntimeError):
+    """Signal that optional recording cannot safely continue."""
+
+
+@dataclass(frozen=True, repr=False)
+class RecordingUploadTarget:
+    """Trusted media-plane destination resolved from an opaque control ref."""
+
+    url: str
+    headers: Dict[str, str]
+
+    def __repr__(self) -> str:
+        return "RecordingUploadTarget(url=<redacted>, headers=<redacted>)"
+
+
 class BlobStore(Protocol):
     async def prepare_upload(self, blob_id: str) -> str: ...
+
+    async def discard_upload(self, upload_url_ref: str) -> None: ...
+
+    async def confirm_upload(self, event: RecordingUploaded) -> bool: ...
+
+    async def discard_blob(self, blob_id: str) -> None: ...
+
+
+@runtime_checkable
+class ContextualBlobStore(Protocol):
+    """Additive hosted-storage capability that leaves ``BlobStore`` frozen."""
+
+    async def prepare_upload_with_context(
+        self,
+        blob_id: str,
+        *,
+        session_id: str,
+        leg: str,
+        consent_ref: str,
+    ) -> str: ...
 
     async def discard_upload(self, upload_url_ref: str) -> None: ...
 
@@ -88,8 +128,10 @@ class LocalBlobStore:
                 await self.upload_gate.wait()
             if self._targets.get(upload_ref) != target:
                 raise HTTPException(status_code=410, detail="upload target revoked")
-            if request.headers.get("content-type") != LOCAL_BLOB_CONTENT_TYPE:
+            if request.headers.get("content-type") != RECORDING_CONTENT_TYPE:
                 raise HTTPException(status_code=415, detail="audio/wav required")
+            if request.headers.get("if-none-match") != "*":
+                raise HTTPException(status_code=412, detail="one-write header required")
             chunks: List[bytes] = []
             byte_count = 0
             async for chunk in request.stream():
@@ -156,11 +198,15 @@ class LocalBlobStore:
             if receipt_blob_id == blob_id:
                 self._receipts.pop(upload_ref, None)
 
-    def resolve_upload_url(self, upload_url_ref: str) -> str:
+    def resolve_upload_target(self, upload_url_ref: str) -> RecordingUploadTarget:
         try:
-            return self._targets[upload_url_ref][1]
+            upload_url = self._targets[upload_url_ref][1]
         except KeyError as exc:
             raise KeyError("unknown upload target") from exc
+        return RecordingUploadTarget(
+            url=upload_url,
+            headers=dict(RECORDING_UPLOAD_HEADERS),
+        )
 
     def read(self, blob_id: str) -> bytes:
         return self._blobs[blob_id]
@@ -172,7 +218,7 @@ class RecordingCoordinator:
     def __init__(
         self,
         spec: RecordingSpec,
-        blob_store: BlobStore,
+        blob_store: Union[BlobStore, ContextualBlobStore],
         tracer: Tracer,
         *,
         id_factory: Optional[Callable[[], str]] = None,
@@ -209,7 +255,15 @@ class RecordingCoordinator:
                 self._reserved_recording_ids.add(recording_id)
                 owned_reservations.append(recording_id)
                 blob_id = _OPAQUE_REF_ADAPTER.validate_python(self._id_factory())
-                upload_url_ref = await self.blob_store.prepare_upload(blob_id)
+                if isinstance(self.blob_store, ContextualBlobStore):
+                    upload_url_ref = await self.blob_store.prepare_upload_with_context(
+                        blob_id,
+                        session_id=session_id,
+                        leg=leg,
+                        consent_ref=effective_consent,
+                    )
+                else:
+                    upload_url_ref = await self.blob_store.prepare_upload(blob_id)
                 prepared_refs.append(upload_url_ref)
                 prepared_blob_ids.append(blob_id)
                 directive = RecordingStart(
@@ -248,6 +302,8 @@ class RecordingCoordinator:
                 raise RecordingCleanupError(
                     "recording start rollback failed", cleanup_errors
                 ) from cause
+            if isinstance(cause, RecordingUnavailableError):
+                return []
             raise
         return directives
 

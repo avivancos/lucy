@@ -27,6 +27,8 @@ order unless the dependency notes say a sprint can start early.
 Cards marked `*` live in `lucy-platform/backlog/` (47 ingest v0, 48 dashboard
 on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
 60 analytics BI dashboards, and platform cards 74-92), not in this repo.
+Platform card 118 is the post-79 recording upload lifecycle hardening dependency
+for SDK card 73.
 
 ## Dependency notes
 
@@ -47,7 +49,7 @@ on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
   messages.
 - S7 needs S1 (the `lucy.observe` seam). Card 72 should run before cards 66,
   70, and the platform schema. Card 73 needs card 30, card 71, and platform
-  card 79.
+  card 118.
 - S8 is last and gates on everything shipped in S1-S7 that the launch story
   demos; card 93 closes stale runtime shims before the public ABI freezes.
 - S9 open cards (52-57, 66-67, 98) need S1 (the `lucy.observe` seam, cards 24/25)

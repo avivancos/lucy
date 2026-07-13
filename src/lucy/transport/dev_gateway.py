@@ -4,9 +4,9 @@
 not a mock: it turns a :class:`~lucy.evals.SyntheticCallScenario` into the
 upstream event stream a media gateway would produce (caller STT partials/final,
 TTS playback in response to the session's ``TtsSpeak``, optional barge-in) and
-accepts the session's downstream directives. Time is virtual - envelope
-timestamps advance by fixed budget-shaped increments, so no wall clock is ever
-consumed and tests are fully deterministic.
+accepts the session's downstream directives. Scenario and event pacing is
+virtual: envelope timestamps advance by fixed budget-shaped increments.
+Recording upload tests intentionally use real local HTTP with bounded timeouts.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ import asyncio
 import hashlib
 import ipaddress
 import io
+import logging
+import re
 import struct
 import wave
 from typing import AsyncIterator, Callable, FrozenSet, Iterable, Optional, Tuple
@@ -24,6 +26,7 @@ import httpx
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.evals import SyntheticCallScenario
+from lucy.recording import RecordingUploadTarget
 from lucy.settings import LatencyBudgets
 from lucy.transport.schema import (
     AmdResult,
@@ -54,7 +57,17 @@ SIMULATOR_RECORDING_FRAMES = (
 SIMULATOR_RECORDING_AMPLITUDES = {"caller": 1000, "agent": 2000, "mixed": 1500}
 SIMULATOR_UPLOAD_TIMEOUT_SECONDS = 5.0
 SIMULATOR_RECORDING_CONTAINER = "wav"
-SIMULATOR_RECORDING_CONTENT_TYPE = "audio/wav"
+_UPLOAD_URL_IN_LOG = re.compile(r"https?://[^\s\"'<>]+")
+
+
+class _SignedUploadLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _UPLOAD_URL_IN_LOG.sub("<redacted-upload-url>", message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
 
 
 class LocalGatewaySimulator:
@@ -77,7 +90,9 @@ class LocalGatewaySimulator:
         vad_interrupt_turns: Iterable[int] = (),
         dtmf_steps: Iterable[str] = (),
         amd_steps: Iterable[AmdResult] = (),
-        recording_upload_resolver: Optional[Callable[[str], str]] = None,
+        recording_upload_resolver: Optional[
+            Callable[[str], RecordingUploadTarget]
+        ] = None,
         recording_upload_timeout_seconds: float = SIMULATOR_UPLOAD_TIMEOUT_SECONDS,
     ) -> None:
         self.scenario = scenario
@@ -129,7 +144,7 @@ class LocalGatewaySimulator:
         try:
             if self.recording_upload_resolver is None:
                 raise KeyError("recording upload resolver is not configured")
-            upload_url = self.recording_upload_resolver(directive.upload_url_ref)
+            upload_target = self.recording_upload_resolver(directive.upload_url_ref)
         except KeyError:
             events.append(
                 self._emit(
@@ -143,7 +158,7 @@ class LocalGatewaySimulator:
             )
             return events
 
-        if not _is_safe_local_upload_url(upload_url):
+        if not _is_safe_local_upload_url(upload_target.url):
             events.append(
                 self._emit(
                     "recording.failed",
@@ -157,14 +172,19 @@ class LocalGatewaySimulator:
             return events
 
         wav_bytes = _deterministic_wav(directive.leg)
+        upload_log_filter = _SignedUploadLogFilter()
+        transport_loggers = (logging.getLogger("httpx"), logging.getLogger("httpcore"))
+        for logger in transport_loggers:
+            logger.addFilter(upload_log_filter)
         try:
             async with httpx.AsyncClient(
-                timeout=self.recording_upload_timeout_seconds
+                timeout=self.recording_upload_timeout_seconds,
+                follow_redirects=False,
             ) as client:
                 response = await client.put(
-                    upload_url,
+                    upload_target.url,
                     content=wav_bytes,
-                    headers={"content-type": SIMULATOR_RECORDING_CONTENT_TYPE},
+                    headers=upload_target.headers,
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -192,6 +212,9 @@ class LocalGatewaySimulator:
                 )
             )
             return events
+        finally:
+            for logger in transport_loggers:
+                logger.removeFilter(upload_log_filter)
 
         events.append(
             self._emit(
@@ -334,7 +357,7 @@ class LocalGatewaySimulator:
                 utterances.append(directive)
             elif isinstance(directive, TtsStreamEnd):
                 return utterances
-            # other directives (e.g. future tts.cancel) don't end collection
+            # Other directives, including tts.cancel, do not end collection.
 
     def _playback(
         self, turn_id: str, utterance_id: str, state: str, mark_chars: int

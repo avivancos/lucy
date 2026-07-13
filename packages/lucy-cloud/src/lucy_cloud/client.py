@@ -71,21 +71,26 @@ def _lucy_version() -> str:
         return "unknown"
 
 
-def _validated_endpoint(endpoint: str) -> str:
+def _validated_http_url(
+    value: str,
+    *,
+    allow_query: bool,
+    label: str,
+) -> str:
     try:
-        parsed = urlsplit(endpoint)
+        parsed = urlsplit(value)
         hostname = parsed.hostname
     except ValueError as exc:
-        raise ValueError("endpoint must be a valid HTTP URL") from exc
+        raise ValueError(f"{label} must be a valid HTTP URL") from exc
     if (
         parsed.scheme not in {"http", "https"}
         or hostname is None
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.query
+        or (parsed.query and not allow_query)
         or parsed.fragment
     ):
-        raise ValueError("endpoint must be a credential-free HTTP URL")
+        raise ValueError(f"{label} must be a credential-free HTTP URL")
     loopback = hostname == "localhost"
     if not loopback:
         try:
@@ -93,8 +98,16 @@ def _validated_endpoint(endpoint: str) -> str:
         except ValueError:
             loopback = False
     if parsed.scheme != "https" and not loopback:
-        raise ValueError("endpoint must use HTTPS outside loopback hosts")
-    return endpoint.rstrip("/")
+        raise ValueError(f"{label} must use HTTPS outside loopback hosts")
+    return value
+
+
+def _validated_endpoint(endpoint: str) -> str:
+    return _validated_http_url(
+        endpoint,
+        allow_query=False,
+        label="endpoint",
+    ).rstrip("/")
 
 
 def _validated_project(project: str) -> str:

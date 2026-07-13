@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import logging
 import socket
 import wave
 from contextlib import asynccontextmanager
@@ -8,6 +9,7 @@ from contextlib import asynccontextmanager
 import httpx
 import pytest
 import uvicorn
+from fastapi import FastAPI, Response
 from pydantic import ValidationError
 
 from lucy.clock import ManualClock
@@ -17,10 +19,11 @@ from lucy.recording import (
     LocalBlobStore,
     RecordingCleanupError,
     RecordingCoordinator,
+    RecordingUploadTarget,
 )
 from lucy.specs import RecordingSpec
 from lucy.testing import InMemoryTraceExporter, RecordingBlobStoreSimulator
-from lucy.transport.dev_gateway import LocalGatewaySimulator
+from lucy.transport.dev_gateway import LocalGatewaySimulator, _SignedUploadLogFilter
 from lucy.transport.schema import (
     Envelope,
     RecordingFailed,
@@ -216,7 +219,7 @@ def test_simulator_reports_unknown_upload_reference_without_creating_blob():
     gateway = LocalGatewaySimulator(
         booking_happy_path(),
         ManualClock(),
-        recording_upload_resolver=store.resolve_upload_url,
+        recording_upload_resolver=store.resolve_upload_target,
     )
     coordinator = RecordingCoordinator(
         RecordingSpec(enabled=True, channels="mixed"),
@@ -447,7 +450,10 @@ def test_simulator_rejects_unsupported_container_and_non_loopback_upload():
     gateway = LocalGatewaySimulator(
         booking_happy_path(),
         ManualClock(),
-        recording_upload_resolver=lambda _: "http://169.254.169.254/audio",
+        recording_upload_resolver=lambda _: RecordingUploadTarget(
+            url="http://169.254.169.254/audio",
+            headers={"content-type": "audio/wav"},
+        ),
     )
 
     unsupported_events = asyncio.run(gateway.execute_recording(unsupported))
@@ -470,6 +476,65 @@ def test_local_blob_server_rejects_wrong_content_type_and_oversize_body():
 
     assert statuses == [415, 413]
     assert blob_count == 0
+
+
+def test_recording_upload_target_repr_redacts_signed_material():
+    target = RecordingUploadTarget(
+        url="https://storage.example/object?signature=do-not-log",
+        headers={"authorization": "do-not-log"},
+    )
+
+    assert repr(target) == "RecordingUploadTarget(url=<redacted>, headers=<redacted>)"
+
+
+@pytest.mark.parametrize("upload_error_status", [None, 503])
+def test_gateway_http_logs_redact_signed_upload_target(
+    upload_error_status,
+    caplog,
+):
+    with caplog.at_level(logging.DEBUG, logger="httpx"):
+        with caplog.at_level(logging.DEBUG, logger="httpcore"):
+            upload_ref, upload_url = asyncio.run(
+                _capture_gateway_upload_logs(upload_error_status)
+            )
+
+    transport_logs = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith(("httpx", "httpcore"))
+    )
+    assert upload_ref not in transport_logs
+    assert upload_url not in transport_logs
+    assert "<redacted-upload-url>" in transport_logs
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://storage.example/private-bearer-token",
+        "https://storage.example/private-bearer-token?signature=query-secret",
+    ],
+)
+def test_gateway_log_filter_redacts_entire_upload_url(url):
+    record = logging.LogRecord(
+        "httpx",
+        logging.INFO,
+        __file__,
+        0,
+        "HTTP Request: PUT %s",
+        (url,),
+        None,
+    )
+
+    assert _SignedUploadLogFilter().filter(record) is True
+    rendered = record.getMessage()
+    assert "private-bearer-token" not in rendered
+    assert "query-secret" not in rendered
+    assert rendered == "HTTP Request: PUT <redacted-upload-url>"
+
+
+def test_gateway_does_not_follow_recording_upload_redirects():
+    assert asyncio.run(_redirected_gateway_upload()) == ("upload_failed", 0)
 
 
 def test_real_http_timeout_and_task_cancellation_cleanup_targets():
@@ -523,7 +588,7 @@ async def _record_dual_leg_call():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         directives = await coordinator.start("sess_sim", consent_ref="consent-42")
         stream = gateway.events()
@@ -606,7 +671,7 @@ async def _failed_http_upload(status_code):
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
         failed = (await gateway.execute_recording(directive))[-1].payload
@@ -620,6 +685,69 @@ async def _failed_http_upload(status_code):
         }
 
 
+async def _capture_gateway_upload_logs(upload_error_status):
+    async with _running_blob_store(upload_error_status=upload_error_status) as store:
+        coordinator = RecordingCoordinator(
+            RecordingSpec(enabled=True, channels="mixed"),
+            store,
+            Tracer(exporters=[], record_audio=True),
+            id_factory=iter(["rec-log-redaction", "blob-log-redaction"]).__next__,
+        )
+        gateway = LocalGatewaySimulator(
+            booking_happy_path(),
+            ManualClock(),
+            recording_upload_resolver=store.resolve_upload_target,
+        )
+        directive = (
+            await coordinator.start("sess-log-redaction", consent_ref="consent")
+        )[0]
+        upload_url = store.resolve_upload_target(directive.upload_url_ref).url
+        result = (await gateway.execute_recording(directive))[-1].payload
+        if isinstance(result, RecordingUploaded):
+            assert await coordinator.recording_uploaded(result) is True
+        else:
+            assert isinstance(result, RecordingFailed)
+            assert await coordinator.recording_failed(result) is True
+        return directive.upload_url_ref, upload_url
+
+
+async def _redirected_gateway_upload():
+    listener, base_url = _bound_listener()
+    app = FastAPI()
+    sentinel_visits = 0
+
+    @app.put("/upload")
+    async def redirect() -> Response:
+        return Response(status_code=307, headers={"location": f"{base_url}/sentinel"})
+
+    @app.put("/sentinel")
+    async def sentinel() -> Response:
+        nonlocal sentinel_visits
+        sentinel_visits += 1
+        return Response(status_code=204)
+
+    directive = RecordingStart(
+        recording_id="recording-redirect",
+        leg="mixed",
+        blob_id="blob-redirect",
+        upload_url_ref="upload-redirect",
+        container="wav",
+        consent_ref="consent-redirect",
+    )
+    gateway = LocalGatewaySimulator(
+        booking_happy_path(),
+        ManualClock(),
+        recording_upload_resolver=lambda _: RecordingUploadTarget(
+            url=f"{base_url}/upload?signature=opaque",
+            headers={"content-type": "audio/wav", "if-none-match": "*"},
+        ),
+    )
+    async with _serving_app(app, listener):
+        failed = (await gateway.execute_recording(directive))[-1].payload
+    assert isinstance(failed, RecordingFailed)
+    return failed.error_code, sentinel_visits
+
+
 async def _late_recording_directive():
     async with _running_blob_store() as store:
         coordinator = RecordingCoordinator(
@@ -631,7 +759,7 @@ async def _late_recording_directive():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
         stream = gateway.events()
@@ -654,15 +782,17 @@ async def _invalid_blob_uploads():
         first_ref = await store.prepare_upload("blob-type")
         second_ref = await store.prepare_upload("blob-size")
         async with httpx.AsyncClient() as client:
+            first_target = store.resolve_upload_target(first_ref)
+            second_target = store.resolve_upload_target(second_ref)
             wrong_type = await client.put(
-                store.resolve_upload_url(first_ref),
+                first_target.url,
                 content=b"data",
-                headers={"content-type": "text/plain"},
+                headers={**first_target.headers, "content-type": "text/plain"},
             )
             too_large = await client.put(
-                store.resolve_upload_url(second_ref),
+                second_target.url,
                 content=b"12345",
-                headers={"content-type": "audio/wav"},
+                headers=second_target.headers,
             )
         await store.discard_upload(first_ref)
         await store.discard_upload(second_ref)
@@ -757,7 +887,7 @@ async def _timed_out_upload():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
             recording_upload_timeout_seconds=0.01,
         )
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
@@ -783,7 +913,7 @@ async def _cancelled_upload():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
         task = asyncio.create_task(gateway.execute_recording(directive))
@@ -807,13 +937,13 @@ async def _revoke_live_upload():
             id_factory=iter(["rec-revoke", "blob-revoke"]).__next__,
         )
         directive = (await coordinator.start("sess-revoke", consent_ref="consent"))[0]
-        upload_url = store.resolve_upload_url(directive.upload_url_ref)
+        upload_target = store.resolve_upload_target(directive.upload_url_ref)
         async with httpx.AsyncClient() as client:
             upload_task = asyncio.create_task(
                 client.put(
-                    upload_url,
+                    upload_target.url,
                     content=_wav_bytes(),
-                    headers={"content-type": "audio/wav"},
+                    headers=upload_target.headers,
                 )
             )
             await started.wait()
@@ -834,7 +964,7 @@ async def _uploaded_then_failed():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
         uploaded = (await gateway.execute_recording(directive))[-1].payload
@@ -888,7 +1018,7 @@ async def _reject_tampered_recording_id():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         directive = (await coordinator.start("sess-real", consent_ref="consent"))[0]
         uploaded = (await gateway.execute_recording(directive))[-1].payload
@@ -909,7 +1039,7 @@ async def _reject_swapped_live_recording_id():
         gateway = LocalGatewaySimulator(
             booking_happy_path(),
             ManualClock(),
-            recording_upload_resolver=store.resolve_upload_url,
+            recording_upload_resolver=store.resolve_upload_target,
         )
         caller, agent = await coordinator.start("sess-swap", consent_ref="consent")
         uploaded = (await gateway.execute_recording(caller))[-1].payload
@@ -925,11 +1055,12 @@ async def _reject_swapped_live_recording_id():
 
 async def _upload_directly(store, recording_id, blob_id, upload_ref):
     body = _wav_bytes()
+    target = store.resolve_upload_target(upload_ref)
     async with httpx.AsyncClient() as client:
         response = await client.put(
-            store.resolve_upload_url(upload_ref),
+            target.url,
             content=body,
-            headers={"content-type": "audio/wav"},
+            headers=target.headers,
         )
     assert response.status_code == 204
     return RecordingUploaded(
@@ -963,28 +1094,36 @@ async def _running_blob_store(
     upload_started=None,
     ref_factory=None,
 ):
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    listener.setblocking(False)
-    port = listener.getsockname()[1]
+    listener, base_url = _bound_listener()
     store = LocalBlobStore(
-        f"http://127.0.0.1:{port}",
+        base_url,
         upload_error_status=upload_error_status,
         max_blob_bytes=max_blob_bytes,
         upload_gate=upload_gate,
         upload_started=upload_started,
         ref_factory=ref_factory,
     )
-    server = uvicorn.Server(
-        uvicorn.Config(store.app, log_level="error", lifespan="off")
-    )
+    async with _serving_app(store.app, listener):
+        yield store
+
+
+def _bound_listener():
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.setblocking(False)
+    return listener, f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+
+@asynccontextmanager
+async def _serving_app(app, listener):
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error", lifespan="off"))
     task = asyncio.create_task(server.serve(sockets=[listener]))
     while not server.started:
         await asyncio.sleep(0)
     try:
-        yield store
+        yield
     finally:
         server.should_exit = True
         await task

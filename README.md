@@ -12,7 +12,10 @@ repo (ADR 0010).
 - Async Python graph runtime for the first multi-node executor.
 - MCP-first external integrations.
 - Docker-first local environment.
-- Optional Rust media gateway sidecar for future audio hot paths.
+- The Rust media gateway sidecar is the architectural owner of the audio hot
+  path behind the versioned control-channel contract. Its current executable
+  proves that boundary with recorded conformance fixtures; deterministic
+  Python simulators cover local use while live media transport is completed.
 - React + Next.js ops dashboard and fleet control plane ship in the closed
   lucy-platform repo, not here.
 
@@ -74,4 +77,3 @@ to its own repo (card 20).
 
 The FastAPI developer portal is available at `/docs`, ReDoc at `/redoc`, and the
 OpenAPI contract at `/openapi.json`.
-

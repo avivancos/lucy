@@ -85,6 +85,81 @@ Phone-like numeric references are rejected; none may contain credentials, PII,
 URLs, or raw audio. The public `Tracer.audio_ref` method remains available for
 non-recording asset references and enforces the same metadata schema.
 
+## Blob uploads
+
+Recording bytes use a separate media-plane flow. The open `lucy-cloud` client
+negotiates targets and validates completion metadata, but the media gateway
+performs the presigned PUT directly; audio bytes never enter telemetry events or
+Python application code.
+
+Presign request:
+
+- `POST {LUCY_ENDPOINT}/v1/blobs`
+- Header: `x-api-key: <key>`
+- Body: nonempty privacy-safe `session_id`; opaque `blob_id` and
+  `consent_ref`; `leg` in `caller`, `agent`, `mixed`; `content_type` equal to
+  `audio/wav`; and a nonempty `retention_class`.
+- Success: `201` with the unchanged external `blob_id`, absolute presigned
+  `upload_url`, positive `expires_at_ms`, method `PUT`, and required upload
+  headers. The gateway must send every returned header; wire v1 requires
+  `content-type: audio/wav` and `if-none-match: *` so one reservation cannot
+  overwrite an existing object. No additional upload header is accepted.
+
+The client accepts an upload target only when its exact scheme, hostname, and
+port match `LUCY_ENDPOINT` or an explicitly configured
+`LUCY_BLOB_UPLOAD_ORIGINS` entry. Non-global IP literals are accepted only when
+they are the configured endpoint origin. The media gateway performs the PUT
+with redirects disabled. These rules
+keep a compromised or malformed presign response from turning recording into a
+credential-forwarding or internal-network request.
+
+The platform namespaces its private object key by tenant while preserving
+Lucy's external `blob_id`. That external identifier is the single join key in
+the control channel, `audio_ref`, recording row, playback route, retention, and
+erasure. The presigned URL is held behind an opaque `upload_url_ref`; neither
+the URL nor its signature may enter the control wire, telemetry, or logs.
+
+After the media plane reports `recording.uploaded`, the client sends:
+
+- `POST {LUCY_ENDPOINT}/v1/blobs/{blob_id}/complete`
+- Header: `x-api-key: <key>`
+- Body: the original `blob_id`, `session_id`, `leg`, `content_type`,
+  `consent_ref`, and `retention_class`, plus the gateway-attested nonnegative
+  `duration_ms`, lowercase 64-hex `sha256`, and nonnegative `byte_count` from
+  `recording.uploaded`.
+- Success: `200` recording metadata containing `blob_id`, `session_id`,
+  optional `turn_id`, `leg`, `duration_ms`, lowercase SHA-256, `byte_count`,
+  nonempty `storage_container`, `content_type`, required `consent_ref`, and
+  `retention_class`.
+
+The platform independently verifies object byte count and content type through
+storage `HEAD`; it does not read audio to recompute duration or SHA-256. Those
+two fields remain media-gateway attestations. The client accepts completion
+only when the immutable response's external identity, duration, hash, byte
+count, leg, consent, content type, and retention class match the gateway event
+and prepared target.
+
+Cancellation uses authenticated `DELETE
+{LUCY_ENDPOINT}/v1/blobs/{blob_id}`. Success is `200` with the unchanged
+`blob_id` and state `aborted`. The platform persists a one-use tombstone before
+best-effort deletion. An issued presigned PUT cannot be revoked, so a platform
+sweeper repeats deletion after expiry to close late-PUT races. The client
+forgets the signed target even when abort is unavailable; the durable expiry
+sweep remains the final cleanup boundary.
+
+Presign, completion, and abort failures; `401`; `429`; 5xx; malformed
+responses; and transport failures suppress optional recording, increment a
+local drop counter, and warn without credentials. They never fail the call.
+An ambiguous transport failure after dispatch or an invalid `201` response
+triggers a best-effort compensating abort. Explicit non-`201` responses do not
+claim a reservation. Client close rejects new work, cancels and drains in-flight
+presigns and completions, rejects completion responses that arrive after close
+starts, and aborts resolved reservations before closing its HTTP transport.
+Close is single-flight; caller cancellation waits for cleanup and credential
+zeroization before it is propagated.
+Network endpoints and upload targets require HTTPS, with plain HTTP allowed
+only for loopback development.
+
 ## Privacy controls (enforced client-side, in open code)
 
 Nothing sensitive leaves the process unless explicitly enabled:
@@ -125,6 +200,7 @@ Explicit `lucy.observe.configure(...)` wins; otherwise environment variables:
 | `LUCY_TRACING` | enable/disable (default: enabled, console exporter) |
 | `LUCY_ENDPOINT` | required credential-free HTTPS ingest base URL; HTTP only for loopback development |
 | `LUCY_API_KEY` | enables the cloud exporter when installed |
+| `LUCY_BLOB_UPLOAD_ORIGINS` | optional comma-separated exact scheme/host/port allowlist for recording PUT targets; defaults to the `LUCY_ENDPOINT` origin |
 | `LUCY_PROJECT` | project name in the envelope |
 | `LUCY_TRACE_SAMPLE` | session sample rate 0..1 |
 | `LUCY_TRACE_FILE` | JSONL file exporter path |

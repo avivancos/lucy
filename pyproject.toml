@@ -44,7 +44,7 @@ where = ["src"]
 members = ["packages/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages/lucy-cloud/lucy_cloud_tests"]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib -m 'not live and not gateway_it'"
 markers = [

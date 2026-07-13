@@ -10,10 +10,11 @@ from lucy.observe.redact import _is_export_approved
 
 from lucy_cloud._wire import DEFAULT_PROJECT
 from lucy_cloud.client import IngestClient
-
-ENV_API_KEY = "LUCY_API_KEY"
-ENV_ENDPOINT = "LUCY_ENDPOINT"
-ENV_PROJECT = "LUCY_PROJECT"
+from lucy_cloud.config import (
+    ENV_PROJECT,
+    cloud_enabled_from_env,
+    resolve_cloud_connection,
+)
 
 
 class CloudTraceExporter:
@@ -28,19 +29,15 @@ class CloudTraceExporter:
         if client is not None:
             self.client = client
             return
-        resolved_endpoint = (
-            endpoint if endpoint is not None else os.environ.get(ENV_ENDPOINT)
-        )
-        resolved_api_key = (
-            api_key if api_key is not None else os.environ.get(ENV_API_KEY)
+        resolved_endpoint, resolved_api_key = resolve_cloud_connection(
+            endpoint,
+            api_key,
         )
         resolved_project = (
             project
             if project is not None
             else os.environ.get(ENV_PROJECT, DEFAULT_PROJECT)
         )
-        if not resolved_endpoint or not resolved_api_key:
-            raise ValueError("Lucy cloud endpoint and API key are required")
         self.client = IngestClient(
             resolved_endpoint,
             resolved_api_key,
@@ -49,7 +46,7 @@ class CloudTraceExporter:
 
     @classmethod
     def from_env(cls) -> Optional["CloudTraceExporter"]:
-        if not os.environ.get(ENV_API_KEY):
+        if not cloud_enabled_from_env():
             return None
         return cls()
 
