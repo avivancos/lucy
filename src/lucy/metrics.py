@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Dict, Optional
+from enum import Enum
+from typing import TYPE_CHECKING, Dict, Mapping, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -11,8 +12,19 @@ from lucy.specs import FunnelStage, SentimentLabel
 
 if TYPE_CHECKING:
     from lucy.observe import Tracer
+    from lucy.providers import ProviderIdentity
 
 MIN_BILLABLE_AUDIO_MINUTES = 1e-9
+
+
+class CostComponent(str, Enum):
+    STT_COST = "stt_cost"
+    LLM_COST = "llm_cost"
+    TTS_COST = "tts_cost"
+    TELEPHONY_COST = "telephony_cost"
+    RAG_COST = "rag_cost"
+    MCP_TOOL_COST = "mcp_tool_cost"
+    INFRA_COST = "infra_cost"
 
 
 class CostBreakdown(BaseModel):
@@ -138,6 +150,7 @@ def emit_cost(
     session_id: str,
     turn_id: Optional[str] = None,
     tracer: Optional["Tracer"] = None,
+    provider_attribution: Optional[Mapping[CostComponent, "ProviderIdentity"]] = None,
 ) -> None:
     """Emit a ``cost`` telemetry event for a session (and optionally a turn).
 
@@ -151,7 +164,12 @@ def emit_cost(
     chosen = tracer if tracer is not None else get_tracer()
     if not chosen.enabled:
         return
-    chosen.cost(session_id=session_id, cost=cost, turn_id=turn_id)
+    chosen.cost(
+        session_id=session_id,
+        cost=cost,
+        turn_id=turn_id,
+        provider_attribution=dict(provider_attribution or {}),
+    )
 
 
 _MOVED_TO_TESTING = ("LocalMetricEventChannel",)

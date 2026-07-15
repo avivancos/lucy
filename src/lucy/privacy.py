@@ -18,6 +18,7 @@ _BASIC_AUTH = re.compile(r"(?i)\bbasic(?:\s*[:=]\s*|\s+)[A-Za-z0-9+/=]+")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/@\s:]*):([^/@\s]+)@")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _CLOUD_ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_OPAQUE_SECRET = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b", re.IGNORECASE)
 _PEM_PRIVATE_KEY = re.compile(
     r"-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----.*?"
     r"-----END(?: [A-Z0-9]+)? PRIVATE KEY-----",
@@ -77,6 +78,7 @@ def scrub_secrets(text: str) -> str:
     )
     text = _JWT.sub(REDACTED, text)
     text = _CLOUD_ACCESS_KEY.sub(REDACTED, text)
+    text = _OPAQUE_SECRET.sub(REDACTED, text)
     return _INLINE_SECRET.sub(lambda match: f"{match.group(1)}={REDACTED}", text)
 
 

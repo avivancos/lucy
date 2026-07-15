@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import math
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Dict, Optional
 
 from lucy.privacy import (
@@ -19,6 +20,7 @@ from lucy.privacy import (
     redact_pii as _redact_pii,
     redact_text as _redact_text,
     scrub_secrets as _scrub_secrets,
+    contains_configured_secret as _contains_configured_secret,
 )
 from lucy.observe.events import (
     RAG_CHUNKS_ATTRIBUTE,
@@ -211,12 +213,37 @@ def _reject_unsafe_structural_values(
             )
 
 
+def _reject_configured_secrets(
+    value: object,
+    secrets: Sequence[str],
+    *,
+    depth: int = 0,
+) -> None:
+    if isinstance(value, str):
+        if _contains_configured_secret(value, secrets):
+            raise PrivacyTraversalError("telemetry contains a configured secret")
+        return
+    if value is None or isinstance(value, (bool, int, float)):
+        return
+    if depth >= MAX_REDACTION_DEPTH:
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_configured_secrets(key, secrets, depth=depth + 1)
+            _reject_configured_secrets(item, secrets, depth=depth + 1)
+        return
+    if isinstance(value, Iterable):
+        for item in value:
+            _reject_configured_secrets(item, secrets, depth=depth + 1)
+
+
 def redact_event(
     event: TelemetryEvent,
     *,
     redact_pii: bool,
     record_audio: bool,
     transcripts_enabled: bool,
+    configured_secrets: Sequence[str] = (),
 ) -> Optional[TelemetryEvent]:
     """Return a sanitized event, or ``None`` to suppress it.
 
@@ -227,6 +254,10 @@ def redact_event(
         return None
     if isinstance(event, AudioRefEvent) and not record_audio:
         return None
+    _reject_configured_secrets(
+        event.__dict__,
+        configured_secrets,
+    )
     _reject_unsafe_structural_values(event, redact_pii=redact_pii)
     safe = event
     if isinstance(safe, ToolCallEvent):
@@ -293,6 +324,19 @@ def redact_event(
                 "attribution": {
                     _sanitize_text(key, redact_pii=redact_pii): value
                     for key, value in safe.attribution.items()
+                },
+                "provider_attribution": {
+                    component: identity.model_copy(
+                        update={
+                            "provider": _sanitize_text(
+                                identity.provider, redact_pii=redact_pii
+                            ),
+                            "model": _sanitize_optional(
+                                identity.model, redact_pii=redact_pii
+                            ),
+                        }
+                    )
+                    for component, identity in safe.provider_attribution.items()
                 },
             }
         )

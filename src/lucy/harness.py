@@ -9,13 +9,14 @@ real call with zero keys and zero wall-clock time.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Iterable, List, Optional, Sequence, Tuple
+from typing import AsyncIterator, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from lucy.clock import Clock, ManualClock
 from lucy.drivers import TurnDriver
 from lucy.evals import EvalEvidence, SyntheticCallScenario
-from lucy.metrics import LatencyWaterfall
+from lucy.metrics import CostComponent, LatencyWaterfall
 from lucy.pricing import PriceBook, TelephonyDirection
+from lucy.providers import ModelRegistry, ProviderIdentity
 from lucy.rag import SpeculativeRagNode
 from lucy.session import Responder, TurnRecord, VoiceSession
 from lucy.settings import LatencyBudgets, SpeculationSettings
@@ -80,6 +81,8 @@ class ConversationHarness:
         telephony_direction: TelephonyDirection = TelephonyDirection.INBOUND,
         rag: Optional[SpeculativeRagNode] = None,
         speculation: Optional[SpeculationSettings] = None,
+        provider_attribution: Optional[Mapping[CostComponent, ProviderIdentity]] = None,
+        provider_registry: Optional[ModelRegistry] = None,
     ) -> HarnessResult:
         clock = clock or ManualClock()
         if not tuple(barge_in_turns) and scenario.expected_outcome == "interruption":
@@ -104,6 +107,8 @@ class ConversationHarness:
             telephony_direction=telephony_direction,
             rag=rag,
             speculation=speculation,
+            provider_attribution=provider_attribution,
+            provider_registry=provider_registry,
         )
         records = await session.run()
         checkpoints: List[Checkpoint] = []

@@ -1,13 +1,19 @@
 import asyncio
 import json
 import uuid
+from types import MappingProxyType
 
 import pytest
 from pydantic import ValidationError
 
 import lucy.observe as observe_module
 from lucy.clock import ManualClock
-from lucy.drivers import CascadedTurnDriver, GraphTurnDriver
+from lucy.drivers import (
+    CascadedTurnDriver,
+    GraphTurnDriver,
+    RealtimeSessionConfig,
+    RealtimeTurnDriver,
+)
 from lucy.evals import SyntheticCallScenario, SyntheticTurn
 from lucy.harness import ConversationHarness
 from lucy.graph import AgentGraph, default_agent_graph
@@ -22,6 +28,7 @@ from lucy.limits import (
 from lucy.mcp import McpClient, McpToolSchema
 from lucy.nodes.action import McpToolNode, SayNode
 from lucy.observe import Tracer
+from lucy.metrics import CostComponent
 from lucy.observe.events import CostEvent
 from lucy.pricing import (
     PriceBook,
@@ -31,11 +38,22 @@ from lucy.pricing import (
     VoiceUsage,
     load_pricebook,
 )
-from lucy.providers import default_model_registry
+from lucy.providers import (
+    Capability,
+    ModelInfo,
+    ModelRegistry,
+    ProviderIdentity,
+    default_model_registry,
+)
 from lucy.rag import InMemoryRagIndex, RagChunk, SpeculativeRagNode
 from lucy.settings import LatencyBudgets, SpeculationSettings
 from lucy.session import VoiceSession
-from lucy.testing import InMemoryTraceExporter, LocalMcpCommandTransport
+from lucy.testing import (
+    InMemoryTraceExporter,
+    LocalMcpCommandTransport,
+    LocalRealtimeSimulator,
+    ScriptedRealtimeTurn,
+)
 from lucy.tools import McpToolExecutor, ToolDef, ToolProfile
 from lucy.transport.dev_gateway import LocalGatewaySimulator
 from lucy.transport.schema import (
@@ -51,6 +69,48 @@ from lucy.transport.schema import (
 
 TEST_LLM_PROVIDER = "openai"
 TEST_LLM_MODEL = "gpt-5"
+TEST_REALTIME_PROVIDER = "openai"
+TEST_REALTIME_MODEL = "gpt-realtime"
+FIXTURE_STT_PROVIDER = "fixture-stt"
+FIXTURE_STT_MODEL = "stt-v9"
+FIXTURE_LLM_PROVIDER = "fixture-llm"
+FIXTURE_LLM_MODEL = "llm-v9"
+FIXTURE_TTS_PROVIDER = "fixture-tts"
+FIXTURE_TTS_MODEL = "tts-v9"
+FIXTURE_REALTIME_PROVIDER = "fixture-realtime"
+FIXTURE_REALTIME_MODEL = "realtime-v9"
+
+
+def _fixture_registry() -> ModelRegistry:
+    return ModelRegistry(
+        version="fixture-v1",
+        models=[
+            ModelInfo(
+                provider=FIXTURE_STT_PROVIDER,
+                model=FIXTURE_STT_MODEL,
+                capabilities=[Capability.STT],
+                recommended_for=[],
+            ),
+            ModelInfo(
+                provider=FIXTURE_LLM_PROVIDER,
+                model=FIXTURE_LLM_MODEL,
+                capabilities=[Capability.LLM],
+                recommended_for=[],
+            ),
+            ModelInfo(
+                provider=FIXTURE_TTS_PROVIDER,
+                model=FIXTURE_TTS_MODEL,
+                capabilities=[Capability.TTS],
+                recommended_for=[],
+            ),
+            ModelInfo(
+                provider=FIXTURE_REALTIME_PROVIDER,
+                model=FIXTURE_REALTIME_MODEL,
+                capabilities=[Capability.REALTIME, Capability.LLM, Capability.TTS],
+                recommended_for=[],
+            ),
+        ],
+    )
 
 
 def _pricebook() -> PriceBook:
@@ -321,6 +381,10 @@ async def _run_session_cost(
     rag: SpeculativeRagNode | None = None,
     speculation: SpeculationSettings | None = None,
     barge_in_turns: tuple[int, ...] = (),
+    provider_attribution: dict[CostComponent, ProviderIdentity] | None = None,
+    registry: ModelRegistry | None = None,
+    llm_provider: str = TEST_LLM_PROVIDER,
+    llm_model: str = TEST_LLM_MODEL,
 ):
     budgets = LatencyBudgets()
     clock = ManualClock()
@@ -339,11 +403,12 @@ async def _run_session_cost(
         clock,
         token_interval_ms=0,
     )
+    resolved_registry = registry or default_model_registry()
     driver = CascadedTurnDriver(
         llm,
-        default_model_registry(),
-        TEST_LLM_PROVIDER,
-        TEST_LLM_MODEL,
+        resolved_registry,
+        llm_provider,
+        llm_model,
         clock,
         budgets,
         min_flush_chars=1,
@@ -378,6 +443,8 @@ async def _run_session_cost(
         rag=rag,
         speculation=speculation,
         barge_in_turns=barge_in_turns,
+        provider_attribution=provider_attribution,
+        provider_registry=resolved_registry,
     )
     tracer.flush()
     costs = [event for event in exporter.events if event.type == "cost"]
@@ -410,6 +477,340 @@ async def test_voice_session_emits_one_full_session_cost_event():
     assert event.attribution["llm_cached_prompt_tokens"] == 500
 
 
+async def test_cascaded_session_attributes_stt_llm_and_tts_independently():
+    registry = _fixture_registry()
+    event, _ = await _run_session_cost(
+        _pricebook(),
+        provider_attribution={
+            CostComponent.STT_COST: ProviderIdentity(
+                provider=FIXTURE_STT_PROVIDER, model=FIXTURE_STT_MODEL
+            ),
+            CostComponent.TTS_COST: ProviderIdentity(
+                provider=FIXTURE_TTS_PROVIDER, model=FIXTURE_TTS_MODEL
+            ),
+        },
+        registry=registry,
+        llm_provider=FIXTURE_LLM_PROVIDER,
+        llm_model=FIXTURE_LLM_MODEL,
+    )
+
+    assert event.provider_attribution == {
+        CostComponent.STT_COST: ProviderIdentity(
+            provider=FIXTURE_STT_PROVIDER, model=FIXTURE_STT_MODEL
+        ),
+        CostComponent.LLM_COST: ProviderIdentity(
+            provider=FIXTURE_LLM_PROVIDER, model=FIXTURE_LLM_MODEL
+        ),
+        CostComponent.TTS_COST: ProviderIdentity(
+            provider=FIXTURE_TTS_PROVIDER, model=FIXTURE_TTS_MODEL
+        ),
+    }
+
+
+def test_voice_session_rejects_provider_attribution_conflicting_with_driver():
+    clock = ManualClock()
+    driver = CascadedTurnDriver(
+        LocalLlmSimulator([], clock, token_interval_ms=0),
+        default_model_registry(),
+        TEST_LLM_PROVIDER,
+        TEST_LLM_MODEL,
+        clock,
+        LatencyBudgets(),
+    )
+    scenario = SyntheticCallScenario(
+        name="provider-conflict",
+        objective="reject conflicting ownership",
+        turns=[],
+        expected_outcome="rejected",
+    )
+
+    with pytest.raises(ValueError, match="conflicts for llm_cost"):
+        VoiceSession(
+            "provider-conflict",
+            LocalGatewaySimulator(scenario, clock),
+            driver=driver,
+            clock=clock,
+            provider_attribution={
+                CostComponent.LLM_COST: ProviderIdentity(
+                    provider=TEST_REALTIME_PROVIDER,
+                    model=TEST_REALTIME_MODEL,
+                )
+            },
+            provider_registry=default_model_registry(),
+        )
+
+
+def test_voice_session_rejects_unresolved_media_provider_attribution():
+    clock = ManualClock()
+
+    async def responder(text: str) -> str:
+        return text
+
+    scenario = SyntheticCallScenario(
+        name="provider-unresolved",
+        objective="reject unresolved ownership",
+        turns=[],
+        expected_outcome="rejected",
+    )
+
+    with pytest.raises(ValueError, match="absent from the model registry"):
+        VoiceSession(
+            "provider-unresolved",
+            LocalGatewaySimulator(scenario, clock),
+            responder=responder,
+            clock=clock,
+            provider_attribution={
+                CostComponent.STT_COST: ProviderIdentity(
+                    provider="unregistered-stt",
+                    model="model-v1",
+                )
+            },
+            provider_registry=_fixture_registry(),
+        )
+
+
+def test_voice_session_requires_registry_for_media_provider_attribution():
+    clock = ManualClock()
+
+    async def responder(text: str) -> str:
+        return text
+
+    scenario = SyntheticCallScenario(
+        name="provider-registry-required",
+        objective="reject attribution without a registry",
+        turns=[],
+        expected_outcome="rejected",
+    )
+
+    with pytest.raises(ValueError, match="requires a model registry"):
+        VoiceSession(
+            "provider-registry-required",
+            LocalGatewaySimulator(scenario, clock),
+            responder=responder,
+            clock=clock,
+            provider_attribution={
+                CostComponent.STT_COST: ProviderIdentity(
+                    provider=FIXTURE_STT_PROVIDER,
+                    model=FIXTURE_STT_MODEL,
+                )
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("component", "provider", "model", "expected_capability"),
+    [
+        (
+            CostComponent.STT_COST,
+            FIXTURE_TTS_PROVIDER,
+            FIXTURE_TTS_MODEL,
+            Capability.STT,
+        ),
+        (
+            CostComponent.TTS_COST,
+            FIXTURE_STT_PROVIDER,
+            FIXTURE_STT_MODEL,
+            Capability.TTS,
+        ),
+    ],
+)
+def test_voice_session_rejects_media_provider_without_required_capability(
+    component, provider, model, expected_capability
+):
+    clock = ManualClock()
+
+    async def responder(text: str) -> str:
+        return text
+
+    scenario = SyntheticCallScenario(
+        name="provider-capability-mismatch",
+        objective="reject attribution with the wrong media capability",
+        turns=[],
+        expected_outcome="rejected",
+    )
+
+    expected_error = f"lacks {expected_capability.value} capability"
+    with pytest.raises(ValueError, match=expected_error):
+        VoiceSession(
+            "provider-capability-mismatch",
+            LocalGatewaySimulator(scenario, clock),
+            responder=responder,
+            clock=clock,
+            provider_attribution={
+                component: ProviderIdentity(provider=provider, model=model)
+            },
+            provider_registry=_fixture_registry(),
+        )
+
+
+def test_voice_session_revalidates_driver_provider_capability():
+    clock = ManualClock()
+    registry = _fixture_registry()
+    driver = CascadedTurnDriver(
+        LocalLlmSimulator([], clock, token_interval_ms=0),
+        registry,
+        FIXTURE_LLM_PROVIDER,
+        FIXTURE_LLM_MODEL,
+        clock,
+        LatencyBudgets(),
+    )
+    driver.provider_attribution = {
+        CostComponent.LLM_COST: ProviderIdentity(
+            provider=FIXTURE_STT_PROVIDER,
+            model=FIXTURE_STT_MODEL,
+        )
+    }
+    scenario = SyntheticCallScenario(
+        name="driver-provider-capability-mismatch",
+        objective="reject mutated driver attribution",
+        turns=[],
+        expected_outcome="rejected",
+    )
+
+    with pytest.raises(ValueError, match="lacks llm capability"):
+        VoiceSession(
+            "driver-provider-capability-mismatch",
+            LocalGatewaySimulator(scenario, clock),
+            driver=driver,
+            clock=clock,
+            provider_registry=registry,
+        )
+
+
+def test_voice_session_uses_driver_registry_for_driver_attribution():
+    clock = ManualClock()
+    driver_registry = _fixture_registry()
+    driver = CascadedTurnDriver(
+        LocalLlmSimulator([], clock, token_interval_ms=0),
+        driver_registry,
+        FIXTURE_LLM_PROVIDER,
+        FIXTURE_LLM_MODEL,
+        clock,
+        LatencyBudgets(),
+    )
+    driver.provider_attribution = {
+        CostComponent.LLM_COST: ProviderIdentity(
+            provider=FIXTURE_STT_PROVIDER,
+            model=FIXTURE_STT_MODEL,
+        )
+    }
+    supplied_registry = _fixture_registry()
+    supplied_model = supplied_registry.get(FIXTURE_STT_PROVIDER, FIXTURE_STT_MODEL)
+    assert supplied_model is not None
+    supplied_model.capabilities.append(Capability.LLM)
+    scenario = SyntheticCallScenario(
+        name="driver-registry-authority",
+        objective="retain driver registry authority",
+        turns=[],
+        expected_outcome="rejected",
+    )
+
+    with pytest.raises(ValueError, match="lacks llm capability"):
+        VoiceSession(
+            "driver-registry-authority",
+            LocalGatewaySimulator(scenario, clock),
+            driver=driver,
+            clock=clock,
+            provider_registry=supplied_registry,
+        )
+
+
+async def test_responder_session_does_not_invent_provider_attribution():
+    clock = ManualClock()
+
+    async def responder(text: str) -> str:
+        return f"heard {text}"
+
+    scenario = SyntheticCallScenario(
+        name="local-responder-attribution",
+        objective="leave unknown provider ownership absent",
+        turns=[SyntheticTurn(speaker="caller", text="hello")],
+        expected_outcome="answered",
+    )
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(
+        exporters=[exporter],
+        clock=lambda: int(clock.monotonic() * 1000),
+    )
+
+    await VoiceSession(
+        "local-responder-attribution",
+        LocalGatewaySimulator(scenario, clock),
+        responder=responder,
+        clock=clock,
+        tracer=tracer,
+        pricebook=_pricebook(),
+    ).run()
+    tracer.flush()
+
+    event = next(item for item in exporter.events if item.type == "cost")
+    assert event.provider_attribution == {}
+
+
+async def test_realtime_session_attributes_speech_components_to_one_provider():
+    clock = ManualClock()
+    registry = _fixture_registry()
+    realtime = LocalRealtimeSimulator(
+        [
+            ScriptedRealtimeTurn(
+                user_text="price this call",
+                assistant_text="Realtime pricing works.",
+                usage=UsageReport(prompt_tokens=1_000, completion_tokens=2_000),
+            )
+        ],
+        clock,
+        transcript_interval_ms=0,
+    )
+    driver = RealtimeTurnDriver(
+        realtime,
+        RealtimeSessionConfig(
+            provider=FIXTURE_REALTIME_PROVIDER,
+            model=FIXTURE_REALTIME_MODEL,
+            system_prompt="Answer the caller.",
+        ),
+        registry,
+        clock,
+        LatencyBudgets(),
+    )
+    exporter = InMemoryTraceExporter()
+    ids = (
+        str(uuid.uuid5(uuid.NAMESPACE_URL, "realtime-pricing-%d" % index))
+        for index in range(20)
+    )
+    tracer = Tracer(
+        exporters=[exporter],
+        clock=lambda: int(clock.monotonic() * 1000),
+        id_factory=lambda: next(ids),
+    )
+    scenario = SyntheticCallScenario(
+        name="realtime-priced-call",
+        objective="attribute realtime voice costs",
+        turns=[SyntheticTurn(speaker="caller", text="price this call")],
+        expected_outcome="answered",
+    )
+
+    await ConversationHarness("realtime-priced-session").run(
+        scenario,
+        driver=driver,
+        clock=clock,
+        tracer=tracer,
+        budgets=LatencyBudgets(),
+        pricebook=_pricebook(),
+    )
+    tracer.flush()
+
+    event = next(item for item in exporter.events if item.type == "cost")
+    identity = ProviderIdentity(
+        provider=FIXTURE_REALTIME_PROVIDER,
+        model=FIXTURE_REALTIME_MODEL,
+    )
+    assert event.provider_attribution == {
+        CostComponent.STT_COST: identity,
+        CostComponent.LLM_COST: identity,
+        CostComponent.TTS_COST: identity,
+    }
+
+
 async def test_voice_session_propagates_outbound_and_second_based_tts_pricing():
     pricebook = PriceBook(
         version="outbound-seconds",
@@ -436,6 +837,12 @@ async def test_barge_in_prices_only_played_tts_duration():
     expected_seconds = 2 * budgets.gateway_pacing_ms / 1000
     assert event.attribution["tts_audio_seconds"] == pytest.approx(expected_seconds)
     assert event.cost.tts_cost == pytest.approx(expected_seconds)
+    assert event.provider_attribution == {
+        CostComponent.LLM_COST: ProviderIdentity(
+            provider=TEST_LLM_PROVIDER,
+            model=TEST_LLM_MODEL,
+        )
+    }
 
 
 async def test_voice_session_prices_rag_mcp_and_accumulated_llm_usage():
@@ -512,6 +919,12 @@ async def test_schema_rejected_mcp_call_is_not_billable():
 
     assert event.attribution["mcp_tool_calls"] == 0
     assert event.cost.mcp_tool_cost == 0
+    assert event.provider_attribution == {
+        CostComponent.LLM_COST: ProviderIdentity(
+            provider=TEST_LLM_PROVIDER,
+            model=TEST_LLM_MODEL,
+        )
+    }
 
 
 async def test_graph_driver_propagates_rag_and_mcp_cost_facts():
@@ -544,6 +957,7 @@ async def test_graph_driver_propagates_rag_and_mcp_cost_facts():
         tools=(tool,),
         tool_executor=executor,
     )
+    inner.provider_attribution = MappingProxyType(inner.provider_attribution)  # type: ignore[assignment]
     rag = SpeculativeRagNode(
         InMemoryRagIndex(
             [RagChunk(id="graph", source="booking", text="Book this call.")]
@@ -578,6 +992,12 @@ async def test_graph_driver_propagates_rag_and_mcp_cost_facts():
     assert cost.attribution["mcp_tool_calls"] == 1
     assert cost.cost.rag_cost == pytest.approx(0.001)
     assert cost.cost.mcp_tool_cost == pytest.approx(0.002)
+    assert cost.provider_attribution == {
+        CostComponent.LLM_COST: ProviderIdentity(
+            provider=TEST_LLM_PROVIDER,
+            model=TEST_LLM_MODEL,
+        )
+    }
 
 
 class _BlockingRagIndex:

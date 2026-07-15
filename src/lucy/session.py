@@ -18,7 +18,16 @@ import math
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
-from typing import Any, Awaitable, Callable, Coroutine, List, Optional, Sequence
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+)
 
 from lucy.budget import (
     BudgetBinding,
@@ -41,10 +50,17 @@ from lucy.limits import (
 )
 from lucy.metrics import (
     CostBreakdown,
+    CostComponent,
     LatencyWaterfall,
     MIN_BILLABLE_AUDIO_MINUTES,
 )
 from lucy.observe import get_tracer
+from lucy.providers import (
+    LOCAL_PROVIDER_NAME,
+    Capability,
+    ModelRegistry,
+    ProviderIdentity,
+)
 from lucy.pricing import (
     PriceBook,
     PricedVoiceUsage,
@@ -246,6 +262,8 @@ class VoiceSession:
         telephony_direction: TelephonyDirection = TelephonyDirection.INBOUND,
         budget_controller: Optional[BudgetController] = None,
         agent_id: Optional[str] = None,
+        provider_attribution: Optional[Mapping[CostComponent, ProviderIdentity]] = None,
+        provider_registry: Optional[ModelRegistry] = None,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -272,6 +290,13 @@ class VoiceSession:
             else load_pricebook()
         )
         self.telephony_direction = telephony_direction
+        driver_registry = getattr(driver, "provider_registry", None)
+        self.provider_attribution = self._merge_provider_attribution(
+            provider_attribution,
+            getattr(driver, "provider_attribution", None),
+            provider_registry,
+            driver_registry,
+        )
         binding = getattr(driver, "budget_binding", None)
         if binding is not None:
             if budget_controller is not None or agent_id is not None:
@@ -343,6 +368,74 @@ class VoiceSession:
         cache_key_setter = getattr(self.driver, "set_cache_key", None)
         if cache_key_setter is not None:
             cache_key_setter(self._cache_key)
+
+    @staticmethod
+    def _merge_provider_attribution(
+        configured: Optional[Mapping[CostComponent, ProviderIdentity]],
+        driver_attribution: object,
+        configured_registry: Optional[ModelRegistry],
+        driver_registry: Optional[ModelRegistry],
+    ) -> dict[CostComponent, ProviderIdentity]:
+        merged = {
+            CostComponent(component): ProviderIdentity.model_validate(identity)
+            for component, identity in (configured or {}).items()
+        }
+        for component, identity in merged.items():
+            VoiceSession._validate_configured_provider_identity(
+                component, identity, configured_registry
+            )
+        if driver_attribution is None:
+            return merged
+        if not isinstance(driver_attribution, Mapping):
+            raise TypeError("driver provider_attribution must be a mapping")
+        for raw_component, raw_identity in driver_attribution.items():
+            component = CostComponent(raw_component)
+            identity = ProviderIdentity.model_validate(raw_identity)
+            VoiceSession._validate_configured_provider_identity(
+                component, identity, driver_registry
+            )
+            existing = merged.get(component)
+            if existing is not None and existing != identity:
+                raise ValueError(
+                    "driver provider attribution conflicts for %s" % component.value
+                )
+            merged[component] = identity
+        return merged
+
+    @staticmethod
+    def _validate_configured_provider_identity(
+        component: CostComponent,
+        identity: ProviderIdentity,
+        provider_registry: Optional[ModelRegistry],
+    ) -> None:
+        if identity.provider == LOCAL_PROVIDER_NAME and identity.model is None:
+            return
+        if provider_registry is None or identity.model is None:
+            raise ValueError(
+                "configured provider attribution requires a model registry"
+            )
+        model = provider_registry.get(identity.provider, identity.model)
+        if model is None:
+            raise ValueError(
+                "configured provider attribution is absent from the model registry"
+            )
+        required_capabilities = {
+            CostComponent.STT_COST: {Capability.STT, Capability.REALTIME},
+            CostComponent.LLM_COST: {Capability.LLM, Capability.REALTIME},
+            CostComponent.TTS_COST: {Capability.TTS, Capability.REALTIME},
+        }.get(component)
+        if required_capabilities is not None and required_capabilities.isdisjoint(
+            model.capabilities
+        ):
+            required_capability = next(
+                capability
+                for capability in required_capabilities
+                if capability is not Capability.REALTIME
+            )
+            raise ValueError(
+                "configured provider attribution lacks %s capability"
+                % required_capability.value
+            )
 
     def _set_state(self, state: TurnState) -> None:
         if state != self.state:
@@ -1114,6 +1207,7 @@ class VoiceSession:
                     cost=priced_usage.cost,
                     pricebook_version=self.pricebook.version,
                     attribution=priced_usage.attribution,
+                    provider_attribution=self.provider_attribution,
                 )
         except (OverflowError, ValueError):
             self._drop_pricing_fact()

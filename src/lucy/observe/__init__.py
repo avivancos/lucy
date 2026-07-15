@@ -17,7 +17,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence
 
-from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.metrics import CostBreakdown, CostComponent, LatencyWaterfall
 from lucy.observe.events import (
     WIRE_VERSION,
     AudioRefEvent,
@@ -51,6 +51,8 @@ from lucy.observe.redact import (
     redact_event,
     redact_text,
 )
+from lucy.providers import ProviderIdentity
+from lucy.privacy import configured_secret_values
 
 DEFAULT_QUEUE_MAXLEN = 2048
 EXPORTER_ENTRY_POINT_GROUP = "lucy.exporters"
@@ -124,6 +126,7 @@ class Tracer:
         clock: Optional[Clock] = None,
         id_factory: Optional[IdFactory] = None,
         tags: Optional[Dict[str, str]] = None,
+        configured_secrets: Optional[Sequence[str]] = None,
     ) -> None:
         self._exporters: List[TraceExporter] = list(exporters)
         self._sample_rate = sample_rate
@@ -136,6 +139,11 @@ class Tracer:
         self._clock = clock or _default_clock
         self._id_factory = id_factory or _default_id_factory
         self._tags = dict(tags or {})
+        self._configured_secrets = tuple(
+            configured_secret_values(os.environ)
+            if configured_secrets is None
+            else configured_secrets
+        )
         self.dropped_events = 0
 
     # -- introspection (used by runtime instrumentation) --------------------
@@ -192,6 +200,7 @@ class Tracer:
                 redact_pii=self._redact_pii,
                 record_audio=self._record_audio,
                 transcripts_enabled=self._transcripts_enabled,
+                configured_secrets=self._configured_secrets,
             )
         except PrivacyTraversalError:
             self.dropped_events += 1
@@ -338,6 +347,7 @@ class Tracer:
         turn_id: Optional[str] = None,
         pricebook_version: Optional[str] = None,
         attribution: Optional[Dict[str, float]] = None,
+        provider_attribution: Optional[Dict[CostComponent, ProviderIdentity]] = None,
         tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
@@ -351,6 +361,7 @@ class Tracer:
                 turn_id=turn_id,
                 pricebook_version=pricebook_version,
                 attribution=dict(attribution or {}),
+                provider_attribution=dict(provider_attribution or {}),
                 tags=self._event_tags(tags),
             )
         )

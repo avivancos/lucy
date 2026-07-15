@@ -43,11 +43,13 @@ from lucy.llm import (
     resolve_llm,
 )
 from lucy.limits import MAX_USAGE_UNITS
+from lucy.metrics import CostComponent
 from lucy.providers import (
     LOCAL_PROVIDER_NAME,
     Capability,
     ModelInfo,
     ModelRegistry,
+    ProviderIdentity,
     parse_spec_string,
 )
 from lucy.pricing import PriceBook, VoiceUsage
@@ -216,9 +218,13 @@ class CascadedTurnDriver:
         # Validate the (provider, model) pair up front - fail fast if unregistered
         # (side effect only; we don't retain the ModelInfo).
         resolve_llm(registry, provider, model)
+        self.provider_registry = registry.model_copy(deep=True)
         self._llm = llm
         self._provider = provider
         self._model = model
+        self.provider_attribution = {
+            CostComponent.LLM_COST: ProviderIdentity(provider=provider, model=model)
+        }
         self._clock = clock
         self._budgets = budgets  # caps tool rounds via max_tool_rounds_per_turn
         self.pricebook = pricing.as_pricebook() if pricing is not None else None
@@ -412,8 +418,15 @@ class RealtimeTurnDriver:
         pricing: Optional[LlmPricing] = None,
     ) -> None:
         resolve_realtime(registry, config.provider, config.model)
+        self.provider_registry = registry.model_copy(deep=True)
         self._provider = provider
         self._config = config
+        identity = ProviderIdentity(provider=config.provider, model=config.model)
+        self.provider_attribution = {
+            CostComponent.STT_COST: identity,
+            CostComponent.LLM_COST: identity,
+            CostComponent.TTS_COST: identity,
+        }
         self._clock = clock
         self._budgets = budgets
         self._tool_executor = tool_executor
@@ -529,6 +542,12 @@ class GraphTurnDriver:
         self.thread_id = thread_id or session_id
         self.clock = clock
         self.state = state or ConversationState()
+        self.provider_attribution = dict(graph.provider_attribution)
+        self.provider_registry = (
+            graph.provider_registry.model_copy(deep=True)
+            if graph.provider_registry is not None
+            else None
+        )
         self._history_base_transcript = [
             line.model_copy(deep=True) for line in self.state.transcript
         ]

@@ -39,9 +39,9 @@ registries, or named constants, never inline literals.
 
 - The SDK remains useful offline while producing the same cost facts the platform
   consumes.
-- Provider routing will be observable through spans and cost attribution after
-  card 98 adds provider identity to the cost event, so platform views can explain
-  fallback and spend differences.
+- Provider routing is observable through spans and per-component provider
+  identity on cost events, so platform views can explain fallback and spend
+  differences.
 - Budget enforcement inside a call is deterministic and testable with
   `ManualClock`; hosted key budgets remain observed and alerted, not ingest-gated.
 - Future hosted cost optimizations must integrate through the public pricing,

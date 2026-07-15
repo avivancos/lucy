@@ -3,10 +3,11 @@ import json
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from lucy import observe as observe_module
 from lucy.mcp import McpClient, McpPermissionError
-from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.metrics import CostBreakdown, CostComponent, LatencyWaterfall
 from lucy.metrics import emit_cost
 from lucy.observe import (
     ConsoleExporter,
@@ -18,6 +19,7 @@ from lucy.observe import (
 )
 from lucy.observe.events import (
     BusinessEvent,
+    CostEvent,
     SessionEndedEvent,
     SessionStartedEvent,
     SpanEvent,
@@ -25,6 +27,7 @@ from lucy.observe.events import (
     TranscriptEvent,
     TurnEvent,
 )
+from lucy.providers import ProviderIdentity
 from lucy.observe.redact import MAX_REDACTION_DEPTH
 from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
 from lucy.testing import InMemoryOtelSpanExporter, InMemoryTraceExporter
@@ -154,6 +157,216 @@ def test_typed_methods_emit_each_event_type():
 
     types = [event.type for event in exporter.events]
     assert types == ["session.started", "turn", "tool_call"]
+
+
+def test_cost_provider_attribution_has_typed_additive_wire_shape():
+    event = CostEvent(
+        event_id=str(uuid.uuid4()),
+        session_id="s1",
+        emitted_at_ms=1,
+        cost=CostBreakdown(
+            stt_cost=0.01,
+            llm_cost=0.02,
+            billable_audio_minutes=1.0,
+        ),
+        provider_attribution={
+            CostComponent.STT_COST: ProviderIdentity(
+                provider="deepgram", model="nova-3"
+            ),
+            CostComponent.LLM_COST: ProviderIdentity(provider="openai", model="gpt-5"),
+        },
+    )
+
+    wire = event.to_wire()
+
+    assert wire["provider_attribution"] == {
+        "stt_cost": {"provider": "deepgram", "model": "nova-3"},
+        "llm_cost": {"provider": "openai", "model": "gpt-5"},
+    }
+
+
+def test_cost_provider_attribution_accepts_provider_without_model():
+    event = CostEvent(
+        event_id=str(uuid.uuid4()),
+        session_id="s1",
+        emitted_at_ms=1,
+        cost=CostBreakdown(infra_cost=0.01, billable_audio_minutes=1.0),
+        provider_attribution={
+            CostComponent.INFRA_COST: ProviderIdentity(provider="local")
+        },
+    )
+
+    assert event.to_wire()["provider_attribution"] == {
+        "infra_cost": {"provider": "local", "model": None}
+    }
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        CostComponent.STT_COST,
+        CostComponent.LLM_COST,
+        CostComponent.TTS_COST,
+        CostComponent.TELEPHONY_COST,
+        CostComponent.RAG_COST,
+        CostComponent.MCP_TOOL_COST,
+        CostComponent.INFRA_COST,
+    ],
+)
+def test_cost_provider_attribution_accepts_each_cost_component(component):
+    identity = ProviderIdentity(provider="fixture", model="model-v1")
+    event = CostEvent(
+        event_id=str(uuid.uuid4()),
+        session_id="s1",
+        emitted_at_ms=1,
+        cost=CostBreakdown(billable_audio_minutes=1.0),
+        provider_attribution={component: identity},
+    )
+
+    assert event.provider_attribution == {component: identity}
+
+
+def test_legacy_cost_event_without_provider_attribution_stays_valid():
+    event = CostEvent.model_validate(
+        {
+            "event_id": str(uuid.uuid4()),
+            "session_id": "s1",
+            "emitted_at_ms": 1,
+            "cost": {"llm_cost": 0.02, "billable_audio_minutes": 1.0},
+        }
+    )
+
+    assert event.provider_attribution == {}
+
+
+def test_cost_provider_attribution_rejects_non_component_keys():
+    with pytest.raises(ValidationError):
+        CostEvent(
+            event_id=str(uuid.uuid4()),
+            session_id="s1",
+            emitted_at_ms=1,
+            cost=CostBreakdown(llm_cost=0.02, billable_audio_minutes=1.0),
+            provider_attribution={
+                "prompt_tokens": ProviderIdentity(provider="openai", model="gpt-5")
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"provider": "https://stt.example/v1", "model": "nova-3"},
+        {"provider": "api.openai.com", "model": "nova-3"},
+        {"provider": "api.prod.internal.", "model": "nova-3"},
+        {"provider": "api.prod.internal..", "model": "nova-3"},
+        {"provider": "api.xn--p1ai", "model": "nova-3"},
+        {"provider": "example.123", "model": "nova-3"},
+        {"provider": "api.example.123", "model": "nova-3"},
+        {"provider": "0x7f000001", "model": "nova-3"},
+        {"provider": "https:api.openai.com", "model": "nova-3"},
+        {"provider": "http:localhost", "model": "nova-3"},
+        {"provider": "http:127.0.0.1", "model": "nova-3"},
+        {"provider": "redis:cache", "model": "nova-3"},
+        {"provider": "ssh:server", "model": "nova-3"},
+        {"provider": "postgresql:db", "model": "nova-3"},
+        {"provider": "deepgram", "model": "mqtt:broker-01"},
+        {"provider": "deepgram", "model": "s3:private-bucket"},
+        {"provider": "deepgram", "model": "h2:internal-service"},
+        {"provider": "deepgram", "model": "socks5:proxy"},
+        {"provider": "deepgram", "model": "http2:metadata"},
+        {"provider": "stt.internal.example:8443", "model": "nova-3"},
+        {"provider": "deepgram", "model": "relay:443"},
+        {"provider": "deepgram", "model": "example.123"},
+        {"provider": "deepgram", "model": "example.123."},
+        {"provider": "deepgram", "model": "example.123.."},
+        {"provider": "127.0.0.1", "model": "nova-3"},
+        {"provider": "localhost", "model": "nova-3"},
+        {"provider": "api_key=do-not-export", "model": "nova-3"},
+        {"provider": "deepgram", "model": "Bearer secret"},
+        {
+            "provider": "deepgram",
+            "model": "sk-proj-1234567890abcdefghijklmnop",
+        },
+        {
+            "provider": "deepgram",
+            "model": "eyJhbGciOiJIUzI1NiJ9.secret.signature",
+        },
+    ],
+)
+def test_cost_provider_attribution_rejects_endpoints_and_secrets(identity):
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter, redact_pii=True)
+
+    with pytest.raises(ValidationError):
+        tracer.cost(
+            session_id="s1",
+            cost=CostBreakdown(llm_cost=0.02, billable_audio_minutes=1.0),
+            provider_attribution={CostComponent.LLM_COST: identity},  # type: ignore[dict-item]
+        )
+    tracer.flush()
+
+    assert exporter.events == []
+
+
+def test_cost_provider_attribution_revalidates_copied_identity():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+    identity = ProviderIdentity(provider="fixture", model="model-v1").model_copy(
+        update={"provider": "api.openai.com"}
+    )
+
+    with pytest.raises(ValidationError):
+        tracer.cost(
+            session_id="s1",
+            cost=CostBreakdown(llm_cost=0.02, billable_audio_minutes=1.0),
+            provider_attribution={CostComponent.LLM_COST: identity},
+        )
+
+    assert exporter.events == []
+
+
+def test_cost_provider_attribution_drops_configured_secret(monkeypatch):
+    secret = "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
+    monkeypatch.setenv("LUCY_API_KEY", secret)
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter)
+
+    tracer.cost(
+        session_id="s1",
+        cost=CostBreakdown(llm_cost=0.02, billable_audio_minutes=1.0),
+        provider_attribution={
+            CostComponent.LLM_COST: ProviderIdentity(
+                provider="fixture",
+                model=secret,
+            )
+        },
+    )
+    tracer.flush()
+
+    assert exporter.events == []
+    assert tracer.dropped_events == 1
+
+
+def test_component_attribution_is_not_overridden_by_coarse_provider_tag():
+    exporter = InMemoryTraceExporter()
+    tracer = _tracer(exporter, tags={"provider": "coarse-provider"})
+    identity = ProviderIdentity(provider="component-provider", model="model-v1")
+
+    tracer.cost(
+        session_id="s1",
+        cost=CostBreakdown(llm_cost=0.02, billable_audio_minutes=1.0),
+        provider_attribution={CostComponent.LLM_COST: identity},
+    )
+    tracer.flush()
+
+    event = next(item for item in exporter.events if item.type == "cost")
+    assert event.tags["provider"] == "coarse-provider"
+    assert event.provider_attribution[CostComponent.LLM_COST] == identity
+
+
+@pytest.mark.parametrize("model", ["gpt-4.1", "llama3.2:3b"])
+def test_provider_identity_accepts_versioned_model_slugs(model):
+    assert ProviderIdentity(provider="fixture-provider", model=model).model == model
 
 
 def test_wire_event_id_must_be_a_uuid():
@@ -952,6 +1165,9 @@ def test_emit_cost_produces_cost_event_for_turn():
         session_id="s1",
         turn_id="t1",
         tracer=tracer,
+        provider_attribution={
+            CostComponent.LLM_COST: ProviderIdentity(provider="openai", model="gpt-5")
+        },
     )
     tracer.flush()
 
@@ -959,6 +1175,9 @@ def test_emit_cost_produces_cost_event_for_turn():
     assert cost.turn_id == "t1"
     assert cost.cost.total_cost == 0.5
     assert cost.cost.cost_per_minute == 0.25
+    assert cost.provider_attribution[CostComponent.LLM_COST] == ProviderIdentity(
+        provider="openai", model="gpt-5"
+    )
 
 
 def test_turn_produces_full_event_tree_with_correct_parents():

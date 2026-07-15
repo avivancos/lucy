@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import ipaddress
+import re
+import socket
 from datetime import date
 from enum import Enum
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+from typing import Annotated, TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+from lucy.limits import MAX_PROVIDER_IDENTITY_LENGTH
+from lucy.privacy import contains_sensitive_text
 
 if TYPE_CHECKING:
     from lucy.plugins import LucyPlugin
@@ -22,6 +28,107 @@ class Capability(str, Enum):
 
 
 LOCAL_PROVIDER_NAME = "local"
+PROVIDER_IDENTITY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+PROVIDER_HOSTNAME_PATTERN = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+"
+    r"(?:[A-Za-z]{2,}|xn--[A-Za-z0-9-]{2,})$"
+)
+PROVIDER_NUMERIC_TLD_HOSTNAME_PATTERN = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.){2,}[0-9]+$"
+)
+PROVIDER_NUMERIC_TLD_NAME_PATTERN = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[0-9]+$"
+)
+PROVIDER_AMBIGUOUS_MODEL_HOST_PATTERN = re.compile(r"^[A-Za-z]+\.[0-9]+$")
+PROVIDER_VERSIONED_MODEL_TAG_PATTERN = re.compile(
+    r"^[A-Za-z0-9._-]*[0-9][A-Za-z0-9._-]*:[0-9]+(?:\.[0-9]+)?[bBmM]$"
+)
+PROVIDER_URI_PATTERN = re.compile(
+    r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*):(?P<target>.+)$"
+)
+PROVIDER_PORT_SUFFIX_PATTERN = re.compile(r"^.+:[0-9]+$")
+ProviderIdentityPart = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_PROVIDER_IDENTITY_LENGTH,
+        pattern=PROVIDER_IDENTITY_PATTERN,
+    ),
+]
+
+
+class ProviderIdentity(BaseModel):
+    """Public provider/model identity safe for cost attribution telemetry."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        revalidate_instances="always",
+    )
+
+    provider: ProviderIdentityPart
+    model: Optional[ProviderIdentityPart] = None
+
+    @field_validator("provider", "model")
+    @classmethod
+    def reject_sensitive_identity(
+        cls,
+        value: Optional[str],
+        info: ValidationInfo,
+    ) -> Optional[str]:
+        if value is not None and contains_sensitive_text(value):
+            raise ValueError("provider identity cannot contain sensitive values")
+        if (
+            value is not None
+            and info.field_name == "provider"
+            and PROVIDER_NUMERIC_TLD_NAME_PATTERN.fullmatch(value.rstrip("."))
+        ):
+            raise ValueError("provider identity cannot contain an endpoint")
+        if (
+            value is not None
+            and info.field_name == "model"
+            and PROVIDER_AMBIGUOUS_MODEL_HOST_PATTERN.fullmatch(value.rstrip("."))
+        ):
+            raise ValueError("provider identity cannot contain an endpoint")
+        if value is not None and _is_endpoint_identity(
+            value,
+            allow_versioned_model=info.field_name == "model",
+        ):
+            raise ValueError("provider identity cannot contain an endpoint")
+        return value
+
+
+def _is_endpoint_identity(value: str, *, allow_versioned_model: bool) -> bool:
+    if _is_endpoint_host(value) or PROVIDER_PORT_SUFFIX_PATTERN.fullmatch(value):
+        return True
+    uri_match = PROVIDER_URI_PATTERN.fullmatch(value)
+    if uri_match is not None:
+        target = uri_match.group("target")
+        if (
+            not allow_versioned_model
+            or not PROVIDER_VERSIONED_MODEL_TAG_PATTERN.fullmatch(value)
+            or _is_endpoint_host(target)
+        ):
+            return True
+    return False
+
+
+def _is_endpoint_host(value: str) -> bool:
+    canonical = value.rstrip(".")
+    if (
+        canonical.lower() == "localhost"
+        or PROVIDER_HOSTNAME_PATTERN.fullmatch(canonical)
+        or PROVIDER_NUMERIC_TLD_HOSTNAME_PATTERN.fullmatch(canonical)
+    ):
+        return True
+    try:
+        ipaddress.ip_address(canonical)
+    except ValueError:
+        try:
+            socket.inet_aton(canonical)
+        except OSError:
+            return False
+    return True
 
 
 class InvalidProviderSpecError(ValueError):

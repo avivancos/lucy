@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -20,7 +21,9 @@ from typing import (
 
 from lucy.drivers import TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage
+from lucy.metrics import CostComponent
 from lucy.observe import Tracer, get_tracer
+from lucy.providers import ModelRegistry, ProviderIdentity
 from lucy.rag import (
     RagResult,
     SpeculativeRagNode,
@@ -80,6 +83,8 @@ class AgentGraph(Generic[StateT]):
         self._edges: Dict[str, List[str]] = {}
         self._conditional: Dict[str, RouteFn[StateT]] = {}
         self._entry: Optional[str] = None
+        self.provider_attribution: Dict[CostComponent, ProviderIdentity] = {}
+        self.provider_registry: Optional[ModelRegistry] = None
 
     def add_node(
         self,
@@ -148,6 +153,12 @@ class AgentGraph(Generic[StateT]):
             entry=self._entry,
             checkpointer=checkpointer,
             limits=limits or GraphLimits(),
+            provider_attribution=dict(self.provider_attribution),
+            provider_registry=(
+                self.provider_registry.model_copy(deep=True)
+                if self.provider_registry is not None
+                else None
+            ),
         )
 
 
@@ -159,6 +170,10 @@ class CompiledAgentGraph(Generic[StateT]):
     conditional: Dict[str, RouteFn[StateT]]
     entry: str
     limits: GraphLimits
+    provider_attribution: Dict[CostComponent, ProviderIdentity] = field(
+        default_factory=dict
+    )
+    provider_registry: Optional[ModelRegistry] = None
     checkpointer: Optional[CheckpointStore] = None
     _node_order: Dict[str, int] = field(init=False)
 
@@ -326,6 +341,15 @@ def default_agent_graph(
     tracer: Optional[Tracer] = None,
 ) -> AgentGraph[ConversationState]:
     graph: AgentGraph[ConversationState] = AgentGraph()
+    attribution = getattr(inner, "provider_attribution", None)
+    if isinstance(attribution, Mapping):
+        graph.provider_attribution = {
+            CostComponent(component): ProviderIdentity.model_validate(identity)
+            for component, identity in attribution.items()
+        }
+    registry = getattr(inner, "provider_registry", None)
+    if isinstance(registry, ModelRegistry):
+        graph.provider_registry = registry.model_copy(deep=True)
 
     async def context_synthesis(
         state: ConversationState, ctx: TurnContext

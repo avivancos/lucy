@@ -69,7 +69,7 @@ numbers; integers do not accept booleans.
 | `session.ended` | Nonempty `reason`; nonnegative integer `duration_ms`; nonnegative `billable_audio_minutes` |
 | `turn` | Nonempty `turn_id`; nonnegative integer `turn_index`; `latency_waterfall` with all six nonnegative numbers `stt_ms`, `rag_ms`, `llm_ms`, `mcp_tools_ms`, `tts_ms`, `transport_ms`; boolean `interrupted`; string-list `timeout_events` |
 | `span` | Nonempty `span_id`, `name`; optional nonempty `turn_id`; optional string `parent_id`; `status` in `ok`, `fallback`, `error`, `cancelled`; nonnegative integer `started_at_ms`, `ended_at_ms`; string-to-string `attributes` |
-| `cost` | Optional string `turn_id`; optional nonempty `pricebook_version`; optional nonnegative finite number map `attribution`; flattened nonnegative `stt_cost`, `llm_cost`, `tts_cost`, `telephony_cost`, `rag_cost`, `mcp_tool_cost`, `infra_cost`, `total_cost`, `cost_per_minute`; strictly positive `billable_audio_minutes` |
+| `cost` | Optional string `turn_id`; optional nonempty `pricebook_version`; optional nonnegative finite number map `attribution`; optional `provider_attribution` map keyed by a seven-component cost name whose values contain slug-shaped `provider` and optional slug-shaped `model`; flattened nonnegative `stt_cost`, `llm_cost`, `tts_cost`, `telephony_cost`, `rag_cost`, `mcp_tool_cost`, `infra_cost`, `total_cost`, `cost_per_minute`; strictly positive `billable_audio_minutes` |
 | `business` | Optional string `turn_id`; nonempty `funnel_stage`, `sentiment_label`; `funnel_confidence` and `sentiment_confidence` in `0..1` |
 | `tool_call` | Nonempty `turn_id`, `server`, `tool`; boolean `allowed`; nonnegative `latency_ms`; optional string `error`; object `arguments` whose nested string keys and values are recursively redacted |
 | `transcript` | Nonempty `turn_id`; `role` in `caller`, `agent`; string `text` containing final, post-redaction segments only |
@@ -141,6 +141,28 @@ the SDK calculation:
   unknown-tool rejections are not.
 - `infra_minutes`, measured over the same control-channel session boundary as
   telephony usage.
+
+The additive `provider_attribution` map assigns ownership independently for
+`stt_cost`, `llm_cost`, `tts_cost`, `telephony_cost`, `rag_cost`,
+`mcp_tool_cost`, and `infra_cost`. Each present value contains a nonempty
+`provider` and an optional nonempty `model`, copied from a resolved runtime
+spec. Consumers allocate only that component's amount to its owner. A legacy
+top-level `tags.provider` remains an optional coarse grouping dimension and
+must never override component attribution.
+
+Cascaded drivers contribute their registry-resolved LLM identity. The session
+assembler may supply explicit STT and TTS identities from the media-plane stack
+configuration; `VoiceSession` requires those nonlocal identities to exist in
+the supplied model registry, validates speech capabilities, and rejects
+conflicts, but does not instantiate media providers itself. Realtime
+speech-to-speech drivers assign their single registry-resolved provider/model
+to STT, LLM, and TTS. Components with local execution may use the explicit
+`{"provider":"local","model":null}` identity or remain absent; components with
+unknown execution remain absent rather than receiving a guessed owner. Legacy events that omit
+`provider_attribution` remain valid. Provider and model values are bounded
+slug identifiers; endpoint-shaped and secret-bearing values are rejected
+before enqueue and the ordinary client-side privacy traversal remains a second
+defense before export.
 
 `src/lucy/pricing.py` is the SDK source of truth. A `PriceBook` can be injected
 directly or loaded from the JSON file named by

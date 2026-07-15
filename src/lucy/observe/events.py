@@ -15,8 +15,9 @@ from uuid import UUID
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from lucy.limits import MAX_PRICEBOOK_VERSION_LENGTH, MAX_USAGE_UNITS
-from lucy.metrics import CostBreakdown, LatencyWaterfall
+from lucy.metrics import CostBreakdown, CostComponent, LatencyWaterfall
 from lucy.privacy import contains_sensitive_text
+from lucy.providers import ProviderIdentity
 from lucy.transport.schema import OpaqueRecordingRef, RecordingContainer
 
 WIRE_VERSION = "1"
@@ -102,6 +103,9 @@ class CostEvent(TelemetryEventBase):
     turn_id: Optional[str] = None
     pricebook_version: Optional[PriceBookVersion] = None
     attribution: Dict[CostAttributionKey, NonNegativeFiniteFloat] = Field(
+        default_factory=dict
+    )
+    provider_attribution: Dict[CostComponent, ProviderIdentity] = Field(
         default_factory=dict
     )
 
