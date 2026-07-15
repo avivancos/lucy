@@ -38,6 +38,7 @@ from lucy.nodes import (
     TransferConfig,
     TransferNode,
 )
+from lucy.observe import Tracer
 from lucy.providers import ModelRegistry
 from lucy.rag import SpeculativeRagNode
 from lucy.runtime import TurnContext
@@ -127,6 +128,7 @@ def booking_agent(
     budgets: LatencyBudgets,
     config: BookingAgentConfig,
     checkpointer: Optional[CheckpointStore] = None,
+    tracer: Optional[Tracer] = None,
 ) -> CompiledAgentGraph[ConversationState]:
     """Build the booking graph used by the six golden sales scenarios."""
     missing = set(config.intents) - set(config.outcome_by_intent)
@@ -140,7 +142,7 @@ def booking_agent(
 
     graph: AgentGraph[ConversationState] = AgentGraph()
     disclosure = DisclosureNode(config.disclosure)
-    context = ContextSynthesisNode(rag, config=config.context)
+    context = ContextSynthesisNode(rag, config=config.context, tracer=tracer)
     slots = SlotFillerNode(config.slots, config.slot_filler)
     router = IntentRouterNode(
         config.intents, llm, registry, provider, model, config.router

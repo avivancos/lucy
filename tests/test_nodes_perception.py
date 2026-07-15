@@ -1,3 +1,5 @@
+import json
+
 from lucy.clock import ManualClock
 from lucy.llm import LocalLlmSimulator, ScriptedLlmTurn, UsageReport
 from lucy.nodes.base import CONVERSATION_STATE_PAYLOAD_KEY, as_graph_node
@@ -14,11 +16,13 @@ from lucy.nodes.perception import (
     SlotFillerNode,
     SlotSpec,
 )
+from lucy.observe import Tracer
 from lucy.providers import default_model_registry
 from lucy.rag import InMemoryRagIndex, RagChunk, SpeculativeRagNode
 from lucy.runtime import GraphExecutor, TurnContext
 from lucy.specs import FunnelStage
 from lucy.state import ConversationState
+from lucy.testing import InMemoryTraceExporter
 from lucy.transport.schema import SessionConfigure, TtsSpeak
 
 
@@ -65,6 +69,57 @@ async def test_context_synthesis_falls_back_to_retrieval_only_on_deadline():
     update = result.results["context_synthesis"]
     assert "Tuesday is available." in update["agent_state"]["prompt_context"]
     assert update["agent_state"]["grounding_ids"] == ["rag:booking:policy"]
+
+
+async def test_context_synthesis_emits_limited_rag_evidence_for_normal_and_fallback():
+    clock = ManualClock()
+    exporter = InMemoryTraceExporter()
+    ids = iter(
+        (
+            "catalog-rag-span-1",
+            "00000000-0000-0000-0000-000000000201",
+            "catalog-rag-span-2",
+            "00000000-0000-0000-0000-000000000202",
+        )
+    )
+    tracer = Tracer(
+        exporters=[exporter],
+        clock=lambda: int(clock.monotonic() * 1000),
+        id_factory=lambda: next(ids),
+    )
+    node = ContextSynthesisNode(
+        SpeculativeRagNode(
+            InMemoryRagIndex(
+                [
+                    RagChunk(id="a", source="booking", text="Tuesday is available."),
+                    RagChunk(id="b", source="booking", text="Tuesday is discounted."),
+                ]
+            )
+        ),
+        config=ContextSynthesisConfig(max_chunks=1),
+        tracer=tracer,
+    )
+    state = ConversationState()
+    context = TurnContext(
+        payload={"user_text": "Tuesday"},
+        session_id="session-catalog",
+        turn_id="turn-catalog",
+        clock=clock,
+    )
+
+    await node(state, context)
+    await node.fallback(state, context)
+    tracer.flush()
+
+    spans = [event for event in exporter.events if event.name == "rag.retrieve"]
+    assert len(spans) == 2
+    for span in spans:
+        assert json.loads(span.attributes["rag.prompt_included_grounding_ids"]) == [
+            "rag:booking:a"
+        ]
+        chunks = json.loads(span.attributes["rag.chunks"])
+        assert [chunk["grounding_id"] for chunk in chunks] == ["rag:booking:a"]
+        assert chunks[0]["included_in_prompt"] is True
 
 
 async def test_slot_filler_merges_slots_and_speaks_confirmation():

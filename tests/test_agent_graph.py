@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -12,12 +13,14 @@ from lucy.graph import (
     default_agent_graph,
 )
 from lucy.llm import LocalLlmSimulator, ScriptedLlmTurn, UsageReport
+from lucy.observe import Tracer
 from lucy.providers import default_model_registry
-from lucy.rag import InMemoryRagIndex, RagChunk, SpeculativeRagNode
+from lucy.rag import InMemoryRagIndex, RagChunk, RagResult, SpeculativeRagNode
 from lucy.runtime import GraphContext, GraphExecutor, GraphNode, TurnContext
 from lucy.settings import GraphLimits, LatencyBudgets
 from lucy.specs import FunnelStage
 from lucy.state import ConversationState, InMemoryCheckpointStore, TranscriptLine
+from lucy.testing import InMemoryTraceExporter
 from lucy.transport.schema import TtsSpeak
 
 
@@ -274,26 +277,78 @@ async def test_default_graph_runs_synthesis_then_llm_then_finalize():
     assert [item.text for item in emitted] == ["Happy to book Tuesday."]
 
 
-async def test_synthesis_deadline_falls_back_to_retrieval_only():
+async def test_default_graph_emits_rag_inspection_span():
     clock = ManualClock()
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(exporters=[exporter])
     rag = SpeculativeRagNode(
         InMemoryRagIndex(
-            [RagChunk(id="1", source="slow", text="slow context")],
-            delay_ms=20,
-        ),
-        deadline_ms=1,
+            [RagChunk(id="1", source="booking_policy", text="Tuesday is open.")]
+        )
     )
     compiled = default_agent_graph(
-        _driver(clock, "Still answering."), rag=rag
+        _driver(clock, "Booked."), rag=rag, tracer=tracer
+    ).compile()
+    ctx = TurnContext(
+        payload={"user_text": "Tuesday"},
+        session_id="session-a",
+        turn_id="turn-a",
+        clock=clock,
+    )
+
+    await compiled.invoke_turn(ConversationState(), ctx)
+    tracer.flush()
+
+    span = next(event for event in exporter.events if event.name == "rag.retrieve")
+    assert span.session_id == "session-a"
+    assert span.turn_id == "turn-a"
+    assert span.status == "ok"
+    assert json.loads(span.attributes["rag.prompt_included_grounding_ids"]) == [
+        "rag:booking_policy:1"
+    ]
+    assert json.loads(span.attributes["rag.chunks"])[0]["included_in_prompt"]
+
+
+async def test_synthesis_deadline_falls_back_to_retrieval_only():
+    clock = ManualClock()
+
+    class DeadlineRagSimulator(SpeculativeRagNode):
+        async def prefetch(self, query: str) -> RagResult:
+            return RagResult(query=query, chunks=[], deadline_exceeded=True)
+
+    rag = DeadlineRagSimulator(InMemoryRagIndex([]))
+    exporter = InMemoryTraceExporter()
+    ids = iter(
+        (
+            "rag-deadline-span",
+            "00000000-0000-0000-0000-000000000101",
+        )
+    )
+    tracer = Tracer(
+        exporters=[exporter],
+        clock=lambda: int(clock.monotonic() * 1000),
+        id_factory=lambda: next(ids),
+    )
+    compiled = default_agent_graph(
+        _driver(clock, "Still answering."), rag=rag, tracer=tracer
     ).compile()
 
     result = await compiled.invoke_turn(
         ConversationState(transcript=[TranscriptLine(speaker="caller", text="slow")]),
-        TurnContext(payload={"user_text": "slow"}, clock=clock),
+        TurnContext(
+            payload={"user_text": "slow"},
+            session_id="session-a",
+            turn_id="turn-a",
+            clock=clock,
+        ),
     )
 
     assert result.agent_state["rag_deadline_exceeded"] is True
     assert result.transcript[-1].text == "Still answering."
+    tracer.flush()
+    span = next(event for event in exporter.events if event.name == "rag.retrieve")
+    assert span.status == "fallback"
+    assert span.attributes["rag.deadline_exceeded"] == "true"
 
 
 async def test_finalize_increments_turns_and_applies_classify():

@@ -20,7 +20,13 @@ from typing import (
 
 from lucy.drivers import TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage
-from lucy.rag import RagResult, SpeculativeRagNode, grounded_context_message
+from lucy.observe import Tracer, get_tracer
+from lucy.rag import (
+    RagResult,
+    SpeculativeRagNode,
+    emit_rag_retrieval_span,
+    grounded_context_message,
+)
 from lucy.runtime import (
     GraphContext,
     GraphExecutionError,
@@ -317,6 +323,7 @@ def default_agent_graph(
     inner: TurnDriver,
     rag: Optional[SpeculativeRagNode] = None,
     classify: Optional[Callable[[ConversationState], Optional[FunnelStage]]] = None,
+    tracer: Optional[Tracer] = None,
 ) -> AgentGraph[ConversationState]:
     graph: AgentGraph[ConversationState] = AgentGraph()
 
@@ -330,7 +337,17 @@ def default_agent_graph(
         ctx.payload[RAG_DISPATCH_COUNT_PAYLOAD_KEY] = int(dispatched)
         if dispatched and ctx.rag_dispatch_observer is not None:
             ctx.rag_dispatch_observer()
+        active_tracer = tracer if tracer is not None else get_tracer()
+        started_at_ms = active_tracer.now_ms()
         result = await rag.prefetch(user_text)
+        emit_rag_retrieval_span(
+            active_tracer,
+            result,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id or None,
+            started_at_ms=started_at_ms,
+            ended_at_ms=active_tracer.now_ms(),
+        )
         ctx.payload[RAG_RESULT_PAYLOAD_KEY] = result
         agent_state = {
             **state.agent_state,

@@ -20,6 +20,12 @@ from lucy.privacy import contains_sensitive_text
 from lucy.transport.schema import OpaqueRecordingRef, RecordingContainer
 
 WIRE_VERSION = "1"
+RAG_RETRIEVAL_SPAN_NAME = "rag.retrieve"
+RAG_QUERY_ATTRIBUTE = "rag.query"
+RAG_CACHE_HIT_ATTRIBUTE = "rag.cache_hit"
+RAG_DEADLINE_EXCEEDED_ATTRIBUTE = "rag.deadline_exceeded"
+RAG_PROMPT_GROUNDING_IDS_ATTRIBUTE = "rag.prompt_included_grounding_ids"
+RAG_CHUNKS_ATTRIBUTE = "rag.chunks"
 NonEmptyString = Annotated[str, Field(min_length=1)]
 NonNegativeFiniteFloat = Annotated[
     float, Field(ge=0.0, le=MAX_USAGE_UNITS, allow_inf_nan=False)

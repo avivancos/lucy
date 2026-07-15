@@ -12,8 +12,14 @@ from pydantic import BaseModel, Field
 from lucy.llm import LlmMessage, LlmProvider, LlmRequest, resolve_llm
 from lucy.metrics import FunnelEvent, SentimentScore
 from lucy.nodes.base import NodeConfig, StateUpdate, collect_llm_text
+from lucy.observe import Tracer, get_tracer
 from lucy.providers import ModelRegistry
-from lucy.rag import RagResult, SpeculativeRagNode, grounded_context_message
+from lucy.rag import (
+    RagResult,
+    SpeculativeRagNode,
+    emit_rag_retrieval_span,
+    grounded_context_message,
+)
 from lucy.runtime import TurnContext
 from lucy.specs import FunnelStage, SentimentLabel
 from lucy.state import ConversationState
@@ -103,6 +109,7 @@ class ContextSynthesisNode:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         config: Optional[ContextSynthesisConfig] = None,
+        tracer: Optional[Tracer] = None,
     ) -> None:
         if llm is not None and (not provider or not model):
             raise ValueError("LLM context synthesis requires provider and model")
@@ -111,12 +118,28 @@ class ContextSynthesisNode:
         self.provider = provider
         self.model = model
         self.config = config or ContextSynthesisConfig()
+        self.tracer = tracer
 
-    async def __call__(self, state: ConversationState, ctx: TurnContext) -> StateUpdate:
+    async def _retrieve(self, ctx: TurnContext) -> RagResult:
+        active_tracer = self.tracer if self.tracer is not None else get_tracer()
+        started_at_ms = active_tracer.now_ms()
         result = _limit_result(
             await self.rag.prefetch(str(ctx.payload.get("user_text", ""))),
             self.config.max_chunks,
         )
+        emit_rag_retrieval_span(
+            active_tracer,
+            result,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id or None,
+            started_at_ms=started_at_ms,
+            ended_at_ms=active_tracer.now_ms(),
+            included_grounding_ids=[chunk.grounding_id for chunk in result.chunks],
+        )
+        return result
+
+    async def __call__(self, state: ConversationState, ctx: TurnContext) -> StateUpdate:
+        result = await self._retrieve(ctx)
         update = _retrieval_update(state, result)
         if self.llm is None or result.deadline_exceeded or not result.chunks:
             return update
@@ -147,10 +170,7 @@ class ContextSynthesisNode:
         return update
 
     async def fallback(self, state: ConversationState, ctx: TurnContext) -> StateUpdate:
-        result = _limit_result(
-            await self.rag.prefetch(str(ctx.payload.get("user_text", ""))),
-            self.config.max_chunks,
-        )
+        result = await self._retrieve(ctx)
         return _retrieval_update(state, result)
 
 

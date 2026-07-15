@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from lucy.llm import LlmMessage
+from lucy.observe import Tracer
+from lucy.observe.events import (
+    RAG_CACHE_HIT_ATTRIBUTE,
+    RAG_CHUNKS_ATTRIBUTE,
+    RAG_DEADLINE_EXCEEDED_ATTRIBUTE,
+    RAG_PROMPT_GROUNDING_IDS_ATTRIBUTE,
+    RAG_QUERY_ATTRIBUTE,
+    RAG_RETRIEVAL_SPAN_NAME,
+)
 
 if TYPE_CHECKING:
     from lucy.testing import LocalEmbeddingFixture
@@ -38,6 +48,91 @@ class RagResult:
         return "\n".join(
             "[%s] %s" % (chunk.grounding_id, chunk.text) for chunk in self.chunks
         )
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def rag_span_attributes(
+    result: RagResult,
+    *,
+    include_text: bool,
+    included_grounding_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, str]:
+    """Build stable string-valued attributes for one RAG retrieval span."""
+    grounding_ids = list(
+        included_grounding_ids
+        if included_grounding_ids is not None
+        else (chunk.grounding_id for chunk in result.chunks)
+    )
+    included = set(grounding_ids)
+    chunks: List[Dict[str, object]] = []
+    for chunk in result.chunks:
+        item: Dict[str, object] = {
+            "id": chunk.id,
+            "source": chunk.source,
+            "grounding_id": chunk.grounding_id,
+            "score": chunk.score,
+            "included_in_prompt": chunk.grounding_id in included,
+        }
+        if chunk.score_components:
+            item["score_components"] = dict(chunk.score_components)
+        if include_text:
+            item["text"] = chunk.text
+        chunks.append(item)
+
+    attributes = {
+        RAG_CACHE_HIT_ATTRIBUTE: _canonical_json(result.cache_hit),
+        RAG_DEADLINE_EXCEEDED_ATTRIBUTE: _canonical_json(result.deadline_exceeded),
+        RAG_PROMPT_GROUNDING_IDS_ATTRIBUTE: _canonical_json(grounding_ids),
+        RAG_CHUNKS_ATTRIBUTE: _canonical_json(chunks),
+    }
+    if include_text:
+        attributes[RAG_QUERY_ATTRIBUTE] = result.query
+    return attributes
+
+
+def emit_rag_retrieval_span(
+    tracer: Tracer,
+    result: RagResult,
+    *,
+    session_id: str,
+    turn_id: Optional[str],
+    started_at_ms: int,
+    ended_at_ms: int,
+    included_grounding_ids: Optional[Sequence[str]] = None,
+) -> bool:
+    """Emit one privacy-governed RAG span without affecting retrieval behavior."""
+    if not tracer.enabled or not session_id:
+        return False
+    try:
+        attributes = rag_span_attributes(
+            result,
+            include_text=tracer.transcript_export_allowed(session_id),
+            included_grounding_ids=included_grounding_ids,
+        )
+    except (OverflowError, TypeError, ValueError):
+        return False
+    try:
+        tracer.span(
+            session_id=session_id,
+            turn_id=turn_id,
+            span_id=tracer.new_id(),
+            name=RAG_RETRIEVAL_SPAN_NAME,
+            status="fallback" if result.deadline_exceeded else "ok",
+            started_at_ms=started_at_ms,
+            ended_at_ms=ended_at_ms,
+            attributes=attributes,
+        )
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return True
 
 
 GROUNDED_CONTEXT_INSTRUCTION = (

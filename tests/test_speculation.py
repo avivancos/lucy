@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -17,6 +18,7 @@ from lucy.llm import (
     compute_cache_key,
 )
 from lucy.mcp import McpClient
+from lucy.observe import Tracer
 from lucy.providers import default_model_registry
 from lucy.rag import InMemoryRagIndex, RagChunk, SpeculativeRagNode
 from lucy.session import (
@@ -26,7 +28,7 @@ from lucy.session import (
     VoiceSession,
 )
 from lucy.settings import LatencyBudgets, SpeculationSettings
-from lucy.testing import LocalMcpCommandTransport
+from lucy.testing import InMemoryTraceExporter, LocalMcpCommandTransport
 from lucy.tools import McpToolExecutor, ToolDef, ToolProfile
 from lucy.transport.schema import (
     ControlEvent,
@@ -268,6 +270,38 @@ async def test_partial_prefetch_makes_final_retrieve_a_cache_hit():
     records = await session.run()
 
     assert records[0].rag_cache_hit is True
+
+
+async def test_voice_prefetch_and_final_retrieval_emit_rag_spans():
+    clock = ManualClock()
+    gateway = PartialFinalGateway(
+        clock, partial="Tuesday morning", final="Tuesday morning"
+    )
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(exporters=[exporter])
+    session = VoiceSession(
+        "s", gateway, _answer, clock=clock, rag=_rag_node(), tracer=tracer
+    )
+
+    await session.run()
+    tracer.flush()
+
+    spans = [
+        event
+        for event in exporter.events
+        if event.type == "span" and event.name == "rag.retrieve"
+    ]
+    assert [span.attributes["rag.cache_hit"] for span in spans] == ["false", "true"]
+    assert all(span.session_id == "s" for span in spans)
+    assert all(span.attributes["rag.query"] == "Tuesday morning" for span in spans)
+    assert [
+        json.loads(span.attributes["rag.prompt_included_grounding_ids"])
+        for span in spans
+    ] == [[], ["rag:booking_policy:booking"]]
+    assert [
+        json.loads(span.attributes["rag.chunks"])[0]["included_in_prompt"]
+        for span in spans
+    ] == [False, True]
 
 
 async def test_prefetch_tasks_never_outlive_the_session():

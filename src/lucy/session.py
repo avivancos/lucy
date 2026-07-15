@@ -52,7 +52,12 @@ from lucy.pricing import (
     VoiceUsage,
     load_pricebook,
 )
-from lucy.rag import RagResult, SpeculativeRagNode, grounded_context_message
+from lucy.rag import (
+    RagResult,
+    SpeculativeRagNode,
+    emit_rag_retrieval_span,
+    grounded_context_message,
+)
 from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, SpeculationSettings
 from lucy.speech import TtsPlanner
@@ -469,7 +474,12 @@ class VoiceSession:
                 action = controller.on_partial(payload.text, payload.stability)
                 if action == SpeculativeAction.PREFETCH_RAG and self.rag is not None:
                     self._track_prefetch(
-                        asyncio.create_task(self._priced_rag_prefetch(payload.text))
+                        asyncio.create_task(
+                            self._priced_rag_prefetch(
+                                payload.text,
+                                turn_id=event.envelope.turn_id,
+                            )
+                        )
                     )
                 elif (
                     action == SpeculativeAction.START_LLM
@@ -772,18 +782,42 @@ class VoiceSession:
         if self.rag is None:
             return
         started = self.clock.monotonic()
-        result = await self._priced_rag_prefetch(turn.user_text)
+        result = await self._priced_rag_prefetch(
+            turn.user_text,
+            turn_id=turn.turn_id,
+            include_in_prompt=True,
+        )
         turn.rag_ms = (self.clock.monotonic() - started) * 1000.0
         turn.rag_cache_hit = result.cache_hit
         turn.rag_result = result
 
-    async def _priced_rag_prefetch(self, query: str) -> RagResult:
+    async def _priced_rag_prefetch(
+        self,
+        query: str,
+        *,
+        turn_id: Optional[str] = None,
+        include_in_prompt: bool = False,
+    ) -> RagResult:
         assert self.rag is not None
+        started_at_ms = self.tracer.now_ms()
         if not self.rag.is_cached(query):
             self._rag_requests = self._checked_usage_add(
                 self._rag_requests, 1, MAX_USAGE_UNITS
             )
         result = await self.rag.prefetch(query)
+        emit_rag_retrieval_span(
+            self.tracer,
+            result,
+            session_id=self.session_id,
+            turn_id=turn_id,
+            started_at_ms=started_at_ms,
+            ended_at_ms=self.tracer.now_ms(),
+            included_grounding_ids=(
+                [chunk.grounding_id for chunk in result.chunks]
+                if include_in_prompt
+                else ()
+            ),
+        )
         return result
 
     async def _interrupt(

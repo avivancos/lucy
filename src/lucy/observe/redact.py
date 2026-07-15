@@ -21,6 +21,9 @@ from lucy.privacy import (
     scrub_secrets as _scrub_secrets,
 )
 from lucy.observe.events import (
+    RAG_CHUNKS_ATTRIBUTE,
+    RAG_PROMPT_GROUNDING_IDS_ATTRIBUTE,
+    RAG_QUERY_ATTRIBUTE,
     AudioRefEvent,
     BusinessEvent,
     CostEvent,
@@ -124,6 +127,62 @@ def _sanitize_string_map(values: Dict[str, str], *, redact_pii: bool) -> Dict[st
     }
 
 
+def _sanitize_json_attribute(value: str, *, redact_pii: bool) -> object:
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise PrivacyTraversalError("span attribute contains invalid JSON") from exc
+    return _process_json(parsed, redact_pii=redact_pii)
+
+
+def _sanitize_span_attributes(
+    values: Dict[str, str],
+    *,
+    redact_pii: bool,
+    transcripts_enabled: bool,
+) -> Dict[str, str]:
+    sanitized: Dict[str, str] = {}
+    for key, value in values.items():
+        safe_key = _sanitize_text(key, redact_pii=redact_pii)
+        if _is_secret_key(key):
+            sanitized[safe_key] = REDACTED
+            continue
+        if key == RAG_QUERY_ATTRIBUTE and not transcripts_enabled:
+            continue
+        if key == RAG_CHUNKS_ATTRIBUTE:
+            chunks = _sanitize_json_attribute(value, redact_pii=redact_pii)
+            if not isinstance(chunks, list) or any(
+                not isinstance(chunk, dict) for chunk in chunks
+            ):
+                raise PrivacyTraversalError("rag.chunks must encode a list of objects")
+            if not transcripts_enabled:
+                for chunk in chunks:
+                    chunk.pop("text", None)
+            sanitized[safe_key] = json.dumps(
+                chunks,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            continue
+        if key == RAG_PROMPT_GROUNDING_IDS_ATTRIBUTE:
+            grounding_ids = _sanitize_json_attribute(value, redact_pii=redact_pii)
+            if not isinstance(grounding_ids, list) or any(
+                not isinstance(item, str) for item in grounding_ids
+            ):
+                raise PrivacyTraversalError(
+                    "rag.prompt_included_grounding_ids must encode a string list"
+                )
+            sanitized[safe_key] = json.dumps(
+                grounding_ids,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+            continue
+        sanitized[safe_key] = _sanitize_text(value, redact_pii=redact_pii)
+    return sanitized
+
+
 def _structural_values(event: TelemetryEvent) -> list[str]:
     values = [event.session_id]
     turn_id = getattr(event, "turn_id", None)
@@ -207,8 +266,10 @@ def redact_event(
         safe = safe.model_copy(
             update={
                 "name": _sanitize_text(safe.name, redact_pii=redact_pii),
-                "attributes": _sanitize_string_map(
-                    safe.attributes, redact_pii=redact_pii
+                "attributes": _sanitize_span_attributes(
+                    safe.attributes,
+                    redact_pii=redact_pii,
+                    transcripts_enabled=transcripts_enabled,
                 ),
             }
         )

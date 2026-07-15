@@ -75,6 +75,29 @@ numbers; integers do not accept booleans.
 | `transcript` | Nonempty `turn_id`; `role` in `caller`, `agent`; string `text` containing final, post-redaction segments only |
 | `audio_ref` | Opaque `blob_id`; boolean `upload_url_requested`; optional string `turn_id`; optional opaque `recording_id`, `consent_ref`; optional `leg` in `caller`, `agent`, `mixed`; optional nonnegative integers `duration_ms`, `byte_count`; optional lowercase 64-hex `sha256`; optional `container` matching `[a-z0-9][a-z0-9._-]{0,31}` (audio bytes never inline) |
 
+### RAG inspection spans
+
+Each retrieval inside a voice turn or the default agent graph emits a
+`span` named `rag.retrieve`. A deadline result uses `status=fallback`; other
+completed retrievals use `status=ok`. The string-valued `attributes` map uses:
+
+- `rag.query`: retrieval query text, present only when transcript export is
+  enabled.
+- `rag.cache_hit` and `rag.deadline_exceeded`: lowercase JSON booleans.
+- `rag.prompt_included_grounding_ids`: a canonical JSON string containing the
+  ordered grounding-id list included in prompt context.
+- `rag.chunks`: a canonical JSON string containing the ordered chunk list. Each
+  object has `id`, `source`, `grounding_id`, finite `score`, and boolean
+  `included_in_prompt`; nonempty `score_components` and text-enabled `text` are
+  optional.
+
+RAG attributes enter the ordinary session-sampling and client-side privacy
+path. The privacy pass parses the two JSON attributes structurally, redacts
+their string values, and rejects malformed, cyclic, over-depth, or nonfinite
+content fail-open. With `transcripts=false`, it removes `rag.query` and every
+chunk `text` even if a caller constructs the span directly; identifiers,
+scores, cache state, deadline state, and prompt-inclusion evidence remain.
+
 An `audio_ref` derived from recording is emitted only after the media plane
 reports `recording.uploaded` and the configured `BlobStore` confirms object
 existence, byte count, SHA-256, container, and duration. Its `blob_id` is the
@@ -218,7 +241,8 @@ Nothing sensitive leaves the process unless explicitly enabled:
 - `record_audio` (default false): suppresses `audio_ref` events entirely.
 - `trace_sample_rate`: whole-session head sampling, deterministic on a hash of
   `session_id`.
-- `transcripts=false`: drops `transcript` events wholesale for regulated
+- `transcripts=false`: drops `transcript` events wholesale and removes RAG
+  query/chunk text while preserving non-text retrieval evidence for regulated
   tenants.
 - Exportable event instances receive an identity- and payload-bound internal
   approval only after this sampling, suppression, and recursive-redaction path.

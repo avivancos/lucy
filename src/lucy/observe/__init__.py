@@ -160,6 +160,14 @@ class Tracer:
             self._enabled and self._record_audio and self._session_sampled(session_id)
         )
 
+    def transcript_export_allowed(self, session_id: str) -> bool:
+        """Whether text-bearing telemetry may be built for this session."""
+        return (
+            self._enabled
+            and self._transcripts_enabled
+            and self._session_sampled(session_id)
+        )
+
     # -- sampling -----------------------------------------------------------
 
     def _session_sampled(self, session_id: str) -> bool:
