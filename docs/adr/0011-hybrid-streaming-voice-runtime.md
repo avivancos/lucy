@@ -6,13 +6,14 @@ Accepted
 
 ## Context
 
-The current `GraphExecutor` (`src/lucy/runtime.py`) is a per-invocation DAG and
-the current `RealtimeVoicePipeline` (`src/lucy/voice.py`) is batch
-request/response. A live call is neither: audio events push continuously for
-minutes, while reasoning happens in bounded bursts. Pipecat-style frame actors
-solve a throughput problem Lucy does not have (ADR 0004 keeps audio frames out
-of Python), and a pure per-turn DAG cannot express barge-in, speculation, or
-sentence-streaming TTS.
+When this decision was proposed, `GraphExecutor` (`src/lucy/runtime.py`) was a
+per-invocation DAG and `RealtimeVoicePipeline` (`src/lucy/voice.py`) was a batch
+request/response prototype. A live call is neither: audio events push
+continuously for minutes, while reasoning happens in bounded bursts.
+Pipecat-style frame actors solve a throughput problem Lucy does not have (ADR
+0004 keeps audio frames out of Python), and a pure per-turn DAG cannot express
+barge-in, speculation, or sentence-streaming TTS. `VoiceSession` now implements
+the event-plane runtime selected by this ADR.
 
 ## Decision
 
@@ -47,6 +48,25 @@ Supporting contracts:
   mechanisms (RAG prefetch on partials, speculative LLM start on stable
   partials with abort-on-revision, sentence-streaming TTS, prompt caching) are
   configuration-gated.
+- Session shutdown cancels active turn and speculative prefetch tasks, but
+  bounds cooperative cleanup to a named number of event-loop turns. A task that
+  ignores cancellation is detached, retained in supervised accounting until it
+  finishes, and reported through a `session.task_cleanup` error span. A
+  `VoiceSession` is single-use; cancelled turns and closed sessions cannot emit
+  later TTS directives or dispatch new MCP calls. The session latches the turn
+  cancellation capability before task cancellation; cascaded and realtime
+  drivers check it again at the MCP transport dispatch boundary. An
+  already-started transport commit resolves within the
+  typed `control_commit_ms` budget or the runtime invokes the transport's
+  abort/close seam before shutdown returns. Transport adapters must make abort
+  idempotent and prevent a timed-out commit from becoming visible later. Adopted MCP tasks whose policy is
+  `run_to_completion` are not cancelled at session end and retain their normal
+  result or sanitized terminal error audit path, with bounded admission per
+  session. Capacity overflow cancels the rejected task under detached
+  supervision and ends the live session. Results that arrive after session completion never mutate returned
+  turn records. Cleanup failures are reported
+  and retained as the context of a primary session cancellation instead of
+  replacing it.
 - Conversation state (transcript, funnel stage, slots, tool results) is
   checkpointed per superstep behind a `CheckpointStore` protocol. The
   in-memory default and optional Postgres/Redis adapters key history by stable
@@ -59,8 +79,8 @@ control-channel schema, scripted by the synthetic scenarios in
 
 ## Consequences
 
-- `RealtimeVoicePipeline` and the batch provider calls are deprecated in favor
-  of the session runtime once it lands; event dataclasses are kept and extended.
+- `VoiceSession` is the live runtime. The former `RealtimeVoicePipeline` has been
+  removed; retained event dataclasses evolve behind the current session API.
 - The control-channel schema becomes a public contract: every transport
   (gateway, CPaaS adapter, PBX adapter, simulator) is an adapter that implements
   it, and the Rust gateway is developed against it.

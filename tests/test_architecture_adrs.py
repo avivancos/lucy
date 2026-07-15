@@ -414,6 +414,6 @@ def test_turn_taking_adr_defines_fluidity_toolset_and_funnel_link():
         "funnel",
         "latencywaterfall",
         "deadline",
-        "voice.py",
+        "session.py",
     ]:
         assert required in adr

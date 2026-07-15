@@ -60,6 +60,7 @@ from lucy.tools import BargeInPolicy, FillerPolicy, McpToolExecutor, ToolDef, To
 from lucy.transport.schema import TtsSpeak
 
 if TYPE_CHECKING:
+    from lucy.budget import BudgetBinding
     from lucy.graph import CompiledAgentGraph
     from lucy.specs import LucySpec
 
@@ -76,6 +77,11 @@ class TurnDriverReport:
 
 
 DriverEvent = Union[TtsSpeak, TurnDriverReport]
+
+
+def _raise_if_turn_cancelled(turn_context: object | None) -> None:
+    if isinstance(turn_context, TurnContext) and turn_context.cancellation.is_set():
+        raise asyncio.CancelledError
 
 
 def _combine_usage(
@@ -216,6 +222,9 @@ class CascadedTurnDriver:
         self._clock = clock
         self._budgets = budgets  # caps tool rounds via max_tool_rounds_per_turn
         self.pricebook = pricing.as_pricebook() if pricing is not None else None
+        self.budget_binding: Optional["BudgetBinding"] = getattr(
+            llm, "budget_binding", None
+        )
         self._min_flush = min_flush_chars
         self._tool_executor = tool_executor
         self._tools_by_name: Dict[str, ToolDef] = {t.name: t for t in tools}
@@ -255,6 +264,7 @@ class CascadedTurnDriver:
 
         def record_mcp_dispatch() -> None:
             nonlocal mcp_tool_calls
+            _raise_if_turn_cancelled(turn_context)
             mcp_tool_calls += 1
             observer = (
                 turn_context.mcp_dispatch_observer
@@ -315,9 +325,11 @@ class CascadedTurnDriver:
                     tool_key=tool_ready.name, ok=False, error_kind="unknown_tool"
                 )
             else:
+                _raise_if_turn_cancelled(turn_context)
                 if getattr(turn_context, "speculative", False):
                     promoted = getattr(turn_context, "promoted")
                     await promoted.wait()
+                    _raise_if_turn_cancelled(turn_context)
                 assert self._tool_executor is not None  # guaranteed above
                 tool = self._tools_by_name[tool_ready.name]
                 filler_text = None
@@ -435,6 +447,7 @@ class RealtimeTurnDriver:
 
         def record_mcp_dispatch() -> None:
             nonlocal mcp_tool_calls
+            _raise_if_turn_cancelled(turn_context)
             mcp_tool_calls += 1
             observer = (
                 turn_context.mcp_dispatch_observer
@@ -466,6 +479,7 @@ class RealtimeTurnDriver:
                             error_kind="unknown_tool",
                         )
                     else:
+                        _raise_if_turn_cancelled(turn_context)
                         result = await self._tool_executor.execute(
                             tool,
                             dict(event.arguments),

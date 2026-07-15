@@ -7,8 +7,10 @@ any field from the environment with the ``LUCY_BUDGET_`` prefix, e.g.
 
 from __future__ import annotations
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lucy.limits import MAX_CONTROL_DURATION_MS
 
 
 class LatencyBudgets(BaseSettings):
@@ -17,6 +19,12 @@ class LatencyBudgets(BaseSettings):
     endpoint_silence_ms: int = 150  # trailing silence that ends the caller's turn
     stt_final_ms: int = 60  # partial -> final settle time
     control_transport_ms: int = 10  # one control-channel hop
+    control_commit_ms: int = Field(
+        default=1_000,
+        ge=1,
+        le=MAX_CONTROL_DURATION_MS,
+        strict=True,
+    )  # directive commit before transport abort
     graph_dispatch_ms: int = 10  # dispatch a turn into the graph runtime
     llm_first_clause_ms: int = 380  # first speakable clause from the LLM
     tts_first_byte_ms: int = 150  # first audio byte from TTS

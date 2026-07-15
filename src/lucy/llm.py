@@ -1,7 +1,7 @@
 """Streaming LLM contract and providers (ADR 0011, ADR 0005).
 
 `LlmProvider.stream_chat` yields a typed stream-event union - the frozen
-contract that the cascaded turn driver (this card), tool rounds (card 34),
+contract that the cascaded turn driver (card 33), tool rounds (card 34),
 speculation (card 36), and the speech-to-speech driver (card 38) build on.
 One OpenAI-compatible adapter covers hosted and self-hosted (vLLM/SGLang)
 engines; a deterministic in-process simulator is the no-mocks test double.
@@ -48,7 +48,7 @@ class LlmRequest(BaseModel):
     tools: Optional[List[dict]] = None
     temperature: Optional[float] = None
     max_output_tokens: Optional[int] = None
-    cache_key: Optional[str] = None  # prompt-cache hint; carried now, used in card 36
+    cache_key: Optional[str] = None  # prompt-cache hint consumed by turn drivers
 
 
 # -- stream event union ------------------------------------------------------
@@ -132,6 +132,7 @@ class ScriptedLlmTurn:
     tokens: List[str]
     usage: UsageReport
     finish_reason: str = "stop"
+    omit_usage: bool = False
     # Tool calls this turn emits after its tokens (card 34). Each yields one
     # ToolCallDelta (arguments as a single JSON fragment) then ToolCallReady;
     # script finish_reason="tool_calls" on such a turn.
@@ -142,19 +143,27 @@ class LocalLlmSimulator:
     """Real in-process ``LlmProvider``: each ``stream_chat`` consumes the next
     scripted turn, emitting one ``TokenDelta`` per token paced by the injected
     clock, then the ``UsageReport``, then ``StreamEnd``. Consumer cancellation
-    propagates ``CancelledError`` and sets ``cancelled``."""
+    sets ``cancelled`` and normally propagates ``CancelledError``. The optional
+    per-turn ``omit_usage`` flag simulates a provider metering failure. The optional
+    ``finalization_error`` is a fault-injection hook: when configured, it is
+    deliberately raised during generator finalization and can replace the
+    cancellation at this simulator boundary."""
 
     def __init__(
         self,
         turns: List[ScriptedLlmTurn],
         clock: Clock,
         token_interval_ms: float,
+        *,
+        finalization_error: Optional[Exception] = None,
     ) -> None:
         self._turns = list(turns)
         self._clock = clock
         self._interval_s = token_interval_ms / 1000.0
         self._index = 0
         self.cancelled = False
+        self.finalized_streams = 0
+        self._finalization_error = finalization_error
         self.seen_cache_keys: List[Optional[str]] = []
         self.seen_requests: List[LlmRequest] = []
 
@@ -176,11 +185,16 @@ class LocalLlmSimulator:
                 yield ToolCallReady(
                     call_id=call.call_id, name=call.name, arguments=call.arguments
                 )
-            yield turn.usage
+            if not turn.omit_usage:
+                yield turn.usage
             yield StreamEnd(finish_reason=turn.finish_reason)  # type: ignore[arg-type]
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+        finally:
+            self.finalized_streams += 1
+            if self._finalization_error is not None:
+                raise self._finalization_error
 
 
 # -- OpenAI-compatible adapter (ADR 0005: also covers vLLM/SGLang) ------------

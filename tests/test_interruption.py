@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from lucy.clock import ManualClock
 from lucy.drivers import CascadedTurnDriver
 from lucy.evals import (
@@ -11,7 +9,13 @@ from lucy.evals import (
     score_synthetic_call,
 )
 from lucy.harness import ConversationHarness, evidence_from_result
-from lucy.llm import LocalLlmSimulator, ScriptedLlmTurn, ToolCallReady, UsageReport
+from lucy.llm import (
+    LocalLlmSimulator,
+    ScriptedLlmTurn,
+    StreamEnd,
+    ToolCallReady,
+    UsageReport,
+)
 from lucy.mcp import McpClient
 from lucy.observe import Tracer
 from lucy.pricing import PriceBook
@@ -157,13 +161,20 @@ class ImmediateBargeGateway:
 
 
 class BlockingToolTransport:
-    def __init__(self, clock: ManualClock, *, advance_ms: float = 40.0) -> None:
+    def __init__(
+        self,
+        clock: ManualClock,
+        *,
+        advance_ms: float = 40.0,
+        error: BaseException | None = None,
+    ) -> None:
         self.clock = clock
         self.advance_ms = advance_ms
         self.started = asyncio.Event()
         self.complete = asyncio.Event()
         self.cancelled = False
         self.commands: list[dict] = []
+        self.error = error
 
     async def call_tool(self, server, tool, arguments):
         self.started.set()
@@ -172,10 +183,68 @@ class BlockingToolTransport:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+        if self.error is not None:
+            raise self.error
         self.clock.advance(self.advance_ms)
         command = {"server": server, "tool": tool, "arguments": arguments}
         self.commands.append(command)
         return command
+
+
+class LateToolProvider:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.requests = 0
+
+    async def stream_chat(self, request):
+        del request
+        self.requests += 1
+        if self.requests == 1:
+            self.started.set()
+            while not self.release.is_set():
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    self.cancelled.set()
+            yield ToolCallReady(
+                call_id="late-call",
+                name="book_meeting",
+                arguments={"day": "tue"},
+            )
+            yield UsageReport(1, 0)
+            yield StreamEnd("tool_calls")
+            return
+        yield UsageReport(1, 0)
+        yield StreamEnd("stop")
+
+
+class LateToolBargeGateway:
+    async def send(self, envelope: Envelope, payload: object) -> None:
+        del envelope, payload
+
+    def __init__(self, provider: LateToolProvider) -> None:
+        self.provider = provider
+
+    async def events(self):
+        yield ControlEvent(
+            Envelope(type="session.started", session_id="s", seq=1, ts_ms=0),
+            SessionStarted(transport="test", caller="opaque", codecs=["pcmu"]),
+        )
+        yield ControlEvent(
+            Envelope(type="stt.final", session_id="s", turn_id="t0", seq=2, ts_ms=10),
+            SttFinal(text="hello", provider="local", stt_ms=10),
+        )
+        await self.provider.started.wait()
+        yield ControlEvent(
+            Envelope(type="barge_in", session_id="s", turn_id="t0", seq=3, ts_ms=20),
+            BargeIn(at_ms=20, during="thinking", utterance_id=""),
+        )
+        yield ControlEvent(
+            Envelope(type="session.ended", session_id="s", seq=4, ts_ms=30),
+            SessionEnded(reason="done"),
+        )
 
 
 def _tool(policy: BargeInPolicy) -> ToolDef:
@@ -193,7 +262,13 @@ def _tool(policy: BargeInPolicy) -> ToolDef:
     )
 
 
-def _tool_driver(clock: ManualClock, transport: BlockingToolTransport, policy):
+def _tool_driver(
+    clock: ManualClock,
+    transport: BlockingToolTransport,
+    policy,
+    *,
+    clients: list[McpClient] | None = None,
+):
     call = ToolCallReady(call_id="c1", name="book_meeting", arguments={"day": "tue"})
     sim = LocalLlmSimulator(
         [
@@ -210,6 +285,8 @@ def _tool_driver(clock: ManualClock, transport: BlockingToolTransport, policy):
     )
     tool = _tool(policy)
     client = McpClient(transport, allowed_tools=[tool.key])
+    if clients is not None:
+        clients.append(client)
     executor = McpToolExecutor(client, clock, emit=lambda event: None)
     return CascadedTurnDriver(
         sim,
@@ -330,7 +407,8 @@ async def test_barge_in_cancels_inflight_tool_with_cancel_policy():
     before = set(asyncio.all_tasks())
     clock = ManualClock()
     transport = BlockingToolTransport(clock)
-    driver = _tool_driver(clock, transport, BargeInPolicy.CANCEL)
+    clients: list[McpClient] = []
+    driver = _tool_driver(clock, transport, BargeInPolicy.CANCEL, clients=clients)
     gateway = ImmediateBargeGateway(mark_chars=4)
     exporter = InMemoryTraceExporter()
     tracer = Tracer(exporters=[exporter])
@@ -359,9 +437,50 @@ async def test_barge_in_cancels_inflight_tool_with_cancel_policy():
     cost = next(event for event in exporter.events if event.type == "cost")
     assert cost.attribution["mcp_tool_calls"] == 1
     assert cost.cost.mcp_tool_cost == 1.0
+    assert len(clients[0].audit_log) == 1
+    assert clients[0].audit_log[0].allowed is True
+    assert clients[0].audit_log[0].error == "cancelled"
+    assert "provider" not in clients[0].audit_log[0].error
     leaked = set(asyncio.all_tasks()) - before
     leaked.discard(asyncio.current_task())
     assert leaked == set()
+
+
+async def test_cancelled_detached_turn_cannot_dispatch_late_mcp_tool():
+    clock = ManualClock()
+    provider = LateToolProvider()
+    transport = BlockingToolTransport(clock)
+    tool = _tool(BargeInPolicy.CANCEL)
+    driver = CascadedTurnDriver(
+        provider,
+        default_model_registry(),
+        "openai",
+        "gpt-5",
+        clock,
+        LatencyBudgets(),
+        min_flush_chars=1,
+        tool_executor=McpToolExecutor(
+            McpClient(transport, allowed_tools=[tool.key]), clock
+        ),
+        tools=[tool],
+    )
+    session = VoiceSession(
+        "s", LateToolBargeGateway(provider), None, driver=driver, clock=clock
+    )
+
+    records = await session.run()
+    assert provider.cancelled.is_set()
+    assert records[0].interrupted is True
+
+    provider.release.set()
+    for _ in range(20):
+        if not session._detached_tasks:
+            break
+        await asyncio.sleep(0)
+
+    assert transport.commands == []
+    assert not transport.started.is_set()
+    assert session._detached_tasks == set()
 
 
 async def test_run_to_completion_tool_survives_barge_in_and_records_result():
@@ -385,13 +504,87 @@ async def test_run_to_completion_tool_survives_barge_in_and_records_result():
     assert transport.commands == [
         {"server": "crm", "tool": "book_meeting", "arguments": {"day": "tue"}}
     ]
-    assert records[0].waterfall.mcp_tools_ms == pytest.approx(37.0)
+    assert records[0].waterfall.mcp_tools_ms == 37.0
     spoken = [
         event.payload.text
         for event in gateway.sent
         if isinstance(event.payload, TtsSpeak)
     ]
     assert spoken == [DEFAULT_FILLERS["en-US"][0]]
+
+
+async def test_session_end_preserves_run_to_completion_tool_audit():
+    clock = ManualClock()
+    transport = BlockingToolTransport(clock, advance_ms=37.0)
+    clients: list[McpClient] = []
+    driver = _tool_driver(
+        clock,
+        transport,
+        BargeInPolicy.RUN_TO_COMPLETION,
+        clients=clients,
+    )
+    gateway = ImmediateBargeGateway(mark_chars=4)
+    session = VoiceSession("s", gateway, None, driver=driver, clock=clock)
+
+    task = asyncio.create_task(session.run())
+    for _ in range(20):
+        if transport.started.is_set():
+            break
+        await asyncio.sleep(0)
+    assert transport.started.is_set()
+    records = await _drain(clock, task, 1, max_steps=80)
+
+    assert transport.cancelled is False
+    assert clients[0].audit_log == []
+    assert records[0].waterfall.mcp_tools_ms == 0.0
+    transport.complete.set()
+    for _ in range(20):
+        if clients[0].audit_log and not session._background_tasks:
+            break
+        await asyncio.sleep(0)
+
+    assert len(clients[0].audit_log) == 1
+    assert clients[0].audit_log[0].allowed is True
+    assert clients[0].audit_log[0].error == ""
+    assert transport.cancelled is False
+    assert session._background_tasks == set()
+    assert records[0].waterfall.mcp_tools_ms == 0.0
+
+
+async def test_session_end_preserves_run_to_completion_transport_error_audit():
+    clock = ManualClock()
+    transport = BlockingToolTransport(
+        clock, error=RuntimeError("provider detail must remain private")
+    )
+    clients: list[McpClient] = []
+    driver = _tool_driver(
+        clock,
+        transport,
+        BargeInPolicy.RUN_TO_COMPLETION,
+        clients=clients,
+    )
+    session = VoiceSession(
+        "s", ImmediateBargeGateway(mark_chars=4), None, driver=driver, clock=clock
+    )
+
+    task = asyncio.create_task(session.run())
+    for _ in range(20):
+        if transport.started.is_set():
+            break
+        await asyncio.sleep(0)
+    assert transport.started.is_set()
+    await _drain(clock, task, 1, max_steps=80)
+    transport.complete.set()
+    for _ in range(20):
+        if clients[0].audit_log and not session._background_tasks:
+            break
+        await asyncio.sleep(0)
+
+    assert len(clients[0].audit_log) == 1
+    assert clients[0].audit_log[0].allowed is True
+    assert clients[0].audit_log[0].error == "transport error"
+    assert "provider detail" not in clients[0].audit_log[0].error
+    assert transport.cancelled is False
 
 
 async def test_repeated_barge_ins_leave_no_orphan_tasks():

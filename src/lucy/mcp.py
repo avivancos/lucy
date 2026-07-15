@@ -130,6 +130,21 @@ class McpClient:
                 self.transport.call_tool(server, tool, arguments),
                 timeout=(timeout_ms or self.default_timeout_ms) / 1000,
             )
+        except asyncio.CancelledError:
+            self._record_audit(
+                McpAuditEvent(
+                    server=server,
+                    tool=tool,
+                    allowed=True,
+                    timestamp=time.time(),
+                    arguments=arguments,
+                    error="cancelled",
+                ),
+                session_id=session_id,
+                turn_id=turn_id,
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise
         except asyncio.TimeoutError as exc:
             self._record_audit(
                 McpAuditEvent(
@@ -145,6 +160,21 @@ class McpClient:
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
             raise McpTimeoutError("deadline exceeded") from exc
+        except Exception:
+            self._record_audit(
+                McpAuditEvent(
+                    server=server,
+                    tool=tool,
+                    allowed=True,
+                    timestamp=time.time(),
+                    arguments=arguments,
+                    error="transport error",
+                ),
+                session_id=session_id,
+                turn_id=turn_id,
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise
 
         self._record_audit(
             McpAuditEvent(

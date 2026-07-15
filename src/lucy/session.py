@@ -13,17 +13,30 @@ returning canned text, M0) or a streaming-LLM ``driver`` (card 33) - never both.
 from __future__ import annotations
 
 import asyncio
+import inspect
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
-from typing import Awaitable, Callable, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Coroutine, List, Optional, Sequence
 
+from lucy.budget import (
+    BudgetBinding,
+    BudgetController,
+    BudgetExceeded,
+    BudgetLease,
+    BudgetLevel,
+    BudgetMeteringError,
+    BudgetNotice,
+)
 from lucy.clock import Clock, MonotonicClock
 from lucy.drivers import TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage, UsageReport, compute_cache_key
 from lucy.limits import (
     MAX_CONTROL_DURATION_MS,
+    MAX_SESSION_BACKGROUND_TASKS,
     MAX_SESSION_ACCOUNTING_TURNS,
+    MAX_TASK_CLEANUP_TURNS,
     MAX_USAGE_UNITS,
 )
 from lucy.metrics import (
@@ -47,6 +60,7 @@ from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
     BargeIn,
     Envelope,
+    SessionEnd,
     SessionEnded,
     SttFinal,
     SttPartial,
@@ -185,6 +199,8 @@ class _ActiveTurn:
     ended_ms: int = 0
     assistant_text: str = ""
     interrupted: bool = False
+    cancelled: bool = False
+    cancellation: asyncio.Event = field(default_factory=asyncio.Event)
     mark_chars: int = 0
     tts_ms: int = 0
     llm_ms: float = 0.0
@@ -192,6 +208,7 @@ class _ActiveTurn:
     mcp_tool_calls: int = 0
     rag_requests: int = 0
     usage: Optional[UsageReport] = None
+    usage_accounted: bool = False
     rag_ms: float = 0.0
     rag_cache_hit: bool = False
     rag_result: Optional[RagResult] = None
@@ -203,7 +220,6 @@ class _ActiveTurn:
     utterance_texts: List[tuple[str, str]] = field(default_factory=list)
     playbacks: List[TtsPlayback] = field(default_factory=list)
     playback_started_ms: dict[str, int] = field(default_factory=dict)
-    background_tasks: "set[asyncio.Task]" = field(default_factory=set)
     record: Optional[TurnRecord] = None
 
 
@@ -223,6 +239,8 @@ class VoiceSession:
         rag: Optional[SpeculativeRagNode] = None,
         pricebook: Optional[PriceBook] = None,
         telephony_direction: TelephonyDirection = TelephonyDirection.INBOUND,
+        budget_controller: Optional[BudgetController] = None,
+        agent_id: Optional[str] = None,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -249,6 +267,51 @@ class VoiceSession:
             else load_pricebook()
         )
         self.telephony_direction = telephony_direction
+        binding = getattr(driver, "budget_binding", None)
+        if binding is not None:
+            if budget_controller is not None or agent_id is not None:
+                raise ValueError("configure driver budget binding only once")
+            if binding.session_id != session_id:
+                raise ValueError("driver budget binding must match the voice session")
+            if binding.pricebook is not None:
+                raise ValueError(
+                    "voice sessions own call pricing; use an unpriced driver"
+                )
+            budget_controller = binding.controller
+            agent_id = binding.agent_id
+        elif (budget_controller is None) != (agent_id is None):
+            raise ValueError(
+                "budget_controller and agent_id must be configured together"
+            )
+        if (
+            binding is None
+            and driver is not None
+            and budget_controller is not None
+            and (
+                budget_controller.policy.has_rpm_limits
+                or budget_controller.policy.has_tpm_limits
+            )
+        ):
+            raise ValueError(
+                "driver rate governance requires an unpriced BudgetedLlmProvider"
+            )
+        self.budget_controller = budget_controller
+        self.agent_id = agent_id
+        self._requires_driver_usage = (
+            binding is None
+            and driver is not None
+            and budget_controller is not None
+            and budget_controller.policy.has_usd_limits
+        )
+        self._budget_binding: Optional[BudgetBinding] = binding
+        self._budget_lease: Optional[BudgetLease] = None
+        if budget_controller is not None:
+            budget_controller.validate_currency(self.pricebook.currency)
+        self._budget_ended = False
+        self._closed = True
+        self._has_run = False
+        self._budget_accounted_usd = 0.0
+        self._session_clock_start = 0.0
         self._llm_prompt_tokens = 0
         self._llm_cached_prompt_tokens = 0
         self._llm_completion_tokens = 0
@@ -266,6 +329,11 @@ class VoiceSession:
         self._history: List[LlmMessage] = []
         self._background_tasks: "set[asyncio.Task]" = set()
         self._prefetch_tasks: "set[asyncio.Task]" = set()
+        self._turn_tasks: "set[asyncio.Task[None]]" = set()
+        self._detached_tasks: "set[asyncio.Task]" = set()
+        self._directive_tasks: "set[asyncio.Task]" = set()
+        self._background_capacity_exceeded = False
+        self._event_stream = None
         self._cache_key = compute_cache_key(session_id, "")
         cache_key_setter = getattr(self.driver, "set_cache_key", None)
         if cache_key_setter is not None:
@@ -277,6 +345,56 @@ class VoiceSession:
             self.transitions.append(state)
 
     async def run(self) -> List[TurnRecord]:
+        if self._has_run:
+            raise RuntimeError("voice session is single-use")
+        self._has_run = True
+        self._closed = False
+        self._session_clock_start = self.clock.monotonic()
+        primary_error: BaseException | None = None
+        try:
+            if self.budget_controller is not None and self.agent_id is not None:
+                if self._budget_binding is not None:
+                    self._budget_lease = self._budget_binding.owner.open_budget_session(
+                        tracer=self.tracer,
+                        voice_session_owns_cost=True,
+                    )
+                else:
+                    self._budget_lease = self.budget_controller.open_session(
+                        self.session_id, self.agent_id, tracer=self.tracer
+                    )
+                await self._apply_budget_notices(
+                    self.budget_controller.preflight_usd(self._budget_lease),
+                    turn_id=None,
+                )
+                if self._budget_ended:
+                    return []
+            return await self._run()
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            self._closed = True
+            cleanup_errors: list[BaseException] = []
+            try:
+                await self._close_event_stream()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+            cleanup_errors.extend(await self._cancel_session_tasks())
+            try:
+                self._record_budget_cost()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+            if primary_error is not None and cleanup_errors:
+                primary_error.__context__ = cleanup_errors[0]
+            if self._budget_lease is not None:
+                if self._budget_binding is not None:
+                    self._budget_binding.owner.close_budget_session()
+                else:
+                    assert self.budget_controller is not None
+                    self.budget_controller.close_session(self._budget_lease)
+                self._budget_lease = None
+
+    async def _run(self) -> List[TurnRecord]:
         records: List[TurnRecord] = []
         active: Optional[_ActiveTurn] = None
         tree = TurnSpanTree(self.session_id)
@@ -287,14 +405,26 @@ class VoiceSession:
         speculative_turn: Optional[_ActiveTurn] = None
         speculative_context: Optional[TurnContext] = None
 
-        async for event in self.transport.events():
+        events = self.transport.events()
+        self._event_stream = events
+        async for event in events:
             payload = event.payload
+            if self._budget_ended and (
+                active is None
+                or not isinstance(payload, TtsPlayback)
+                or event.envelope.turn_id != active.turn_id
+            ):
+                break
             event_turn_id = event.envelope.turn_id or "turn"
             last_ts = event.envelope.ts_ms
             if not started:
                 tree.start_session(event.envelope.ts_ms)
                 started_ts = event.envelope.ts_ms
                 started = True
+
+            await self._enforce_cost_budget(event_turn_id)
+            if self._budget_ended:
+                break
 
             if isinstance(payload, VadSpeechStart):
                 accounting_cycle_open = bool(
@@ -359,6 +489,7 @@ class VoiceSession:
                         session_id=self.session_id,
                         turn_id=speculative_turn.turn_id,
                         clock=self.clock,
+                        cancellation=speculative_turn.cancellation,
                         speculative=True,
                         rag_dispatch_observer=partial(
                             self._record_rag_dispatch, speculative_turn
@@ -367,7 +498,7 @@ class VoiceSession:
                             self._record_mcp_dispatch, speculative_turn
                         ),
                     )
-                    speculative_turn.task = asyncio.create_task(
+                    speculative_turn.task = self._create_turn_task(
                         self._run_driver_turn(speculative_turn, speculative_context)
                     )
                     controller.start(payload.text, speculative_turn.task)
@@ -435,6 +566,7 @@ class VoiceSession:
                         session_id=self.session_id,
                         turn_id=active.turn_id,
                         clock=self.clock,
+                        cancellation=active.cancellation,
                         rag_dispatch_observer=partial(
                             self._record_rag_dispatch, active
                         ),
@@ -442,11 +574,11 @@ class VoiceSession:
                             self._record_mcp_dispatch, active
                         ),
                     )
-                    active.task = asyncio.create_task(
+                    active.task = self._create_turn_task(
                         self._run_driver_turn(active, context)
                     )
                 else:
-                    active.task = asyncio.create_task(self._run_turn(active))
+                    active.task = self._create_turn_task(self._run_turn(active))
 
             elif isinstance(payload, TtsPlayback) and active is not None:
                 active.playbacks.append(payload)
@@ -486,16 +618,19 @@ class VoiceSession:
             elif isinstance(payload, SessionEnded):
                 break
 
+            if self._budget_ended:
+                break
+
+        close_events = getattr(events, "aclose", None)
+        if callable(close_events):
+            await close_events()
+        self._event_stream = None
+
         # A turn still in flight when the channel closed: cancel and record it.
         if active is not None:
             active.ended_ms = active.ended_ms or last_ts
             await self._cancel_task(active)
             await self._complete(active, tree, records)
-
-        if self._prefetch_tasks:
-            await asyncio.gather(*list(self._prefetch_tasks), return_exceptions=True)
-        if self._background_tasks:
-            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
 
         incomplete_vad_facts = len(self._vad_started_at) + len(
             self._pending_stt_speech_ms
@@ -507,19 +642,19 @@ class VoiceSession:
         self._stt_billed_turns.clear()
 
         tree.end_session(last_ts)
+        await self._enforce_cost_budget(None)
         tree.emit(self.tracer)
         self._emit_session_cost(started_ts, last_ts)
         self.spans = list(tree.spans)
         return records
 
-    async def _send_stream_end(self, turn: _ActiveTurn) -> None:
+    async def _send_stream_end(self, turn: _ActiveTurn, *, force: bool = False) -> None:
         """End-of-speech barrier: exactly once per turn, on every path (normal
         completion or cancellation), so the gateway simulator can drain the
         turn's directives deterministically (card 64)."""
         if turn.barrier_sent:
             return
-        turn.barrier_sent = True
-        await self.transport.send(
+        sent = await self._send_directive(
             Envelope(
                 type="tts.stream_end",
                 session_id=self.session_id,
@@ -528,7 +663,10 @@ class VoiceSession:
                 ts_ms=0,
             ),
             TtsStreamEnd(),
+            turn=None if force else turn,
         )
+        if sent:
+            turn.barrier_sent = True
 
     async def _run_turn(self, turn: _ActiveTurn) -> None:
         assert self.responder is not None
@@ -546,6 +684,8 @@ class VoiceSession:
             await self._send_tts_speak(turn, utterance)
         finally:
             await self._send_stream_end(turn)
+        if turn.cancelled:
+            return
         await turn.playback_finished.wait()
 
     async def _run_driver_turn(
@@ -581,10 +721,25 @@ class VoiceSession:
                     turn.mcp_tool_calls = max(turn.mcp_tool_calls, event.mcp_tool_calls)
                     turn.rag_requests = max(turn.rag_requests, event.rag_requests)
                     turn.usage = event.usage
+                    self._account_turn_usage(turn)
+                    if self._requires_driver_usage and event.usage is None:
+                        await self._end_for_budget(turn.turn_id)
+        except BudgetExceeded as exc:
+            if exc.usage is not None:
+                turn.usage = exc.usage
+                self._account_turn_usage(turn)
+            if not turn.assistant_text and turn.utterance_texts:
+                turn.assistant_text = " ".join(text for _, text in turn.utterance_texts)
+            await self._apply_budget_notices(
+                (exc.notice,),
+                turn_id=turn.turn_id,
+            )
+        except BudgetMeteringError:
+            await self._end_for_budget(turn.turn_id)
         finally:
             if context is None or not context.speculative:
                 await self._send_stream_end(turn)
-        if context is None or not context.speculative:
+        if not turn.cancelled and (context is None or not context.speculative):
             await turn.playback_finished.wait()
 
     async def _send_tts_speak(
@@ -596,7 +751,7 @@ class VoiceSession:
         if context is not None and context.speculative:
             context.buffered_directives.append(utterance)
             return
-        await self.transport.send(
+        sent = await self._send_directive(
             Envelope(
                 type="tts.speak",
                 session_id=self.session_id,
@@ -605,7 +760,10 @@ class VoiceSession:
                 ts_ms=0,
             ),
             utterance,
+            turn=turn,
         )
+        if not sent:
+            return
         self._tts_characters = self._checked_usage_add(
             self._tts_characters, len(utterance.text), MAX_USAGE_UNITS
         )
@@ -638,7 +796,7 @@ class VoiceSession:
         turn.interrupted = True
         turn.ended_ms = ts_ms
         if self.state == TurnState.SPEAKING:
-            await self.transport.send(
+            await self._send_directive(
                 Envelope(
                     type="tts.cancel",
                     session_id=self.session_id,
@@ -647,6 +805,7 @@ class VoiceSession:
                     ts_ms=0,
                 ),
                 TtsCancel(utterance_id="all"),
+                turn=turn,
             )
         # Only a turn that actually began SPEAKING has a TTS slice; interrupting
         # during THINKING leaves speak_started_ms at 0, so guard the subtraction
@@ -659,10 +818,12 @@ class VoiceSession:
             )
         turn.playback_started_ms.clear()
         await self._cancel_task(turn)
+        if self._background_capacity_exceeded and not self._budget_ended:
+            await self._end_for_budget(turn.turn_id)
         # A task cancelled before its first run never executes its finally, so
         # its stream-end barrier was never sent - send it here (exactly-once is
         # guarded by turn.barrier_sent) or the gateway's drain would deadlock.
-        await self._send_stream_end(turn)
+        await self._send_stream_end(turn, force=True)
         await self._complete(turn, tree, records)
         self._set_state(TurnState.LISTENING)
 
@@ -670,22 +831,7 @@ class VoiceSession:
         self, turn: _ActiveTurn, tree: TurnSpanTree, records: List[TurnRecord]
     ) -> None:
         record = self._finalize(turn, tree)
-        if turn.usage is not None:
-            self._llm_prompt_tokens = self._checked_usage_add(
-                self._llm_prompt_tokens,
-                turn.usage.prompt_tokens,
-                MAX_USAGE_UNITS,
-            )
-            self._llm_cached_prompt_tokens = self._checked_usage_add(
-                self._llm_cached_prompt_tokens,
-                turn.usage.cached_prompt_tokens,
-                MAX_USAGE_UNITS,
-            )
-            self._llm_completion_tokens = self._checked_usage_add(
-                self._llm_completion_tokens,
-                turn.usage.completion_tokens,
-                MAX_USAGE_UNITS,
-            )
+        self._account_turn_usage(turn)
         self._mcp_tool_calls = self._checked_usage_add(
             self._mcp_tool_calls, turn.mcp_tool_calls, MAX_USAGE_UNITS
         )
@@ -707,27 +853,130 @@ class VoiceSession:
         persist_history = getattr(self.driver, "persist_reconciled_history", None)
         if callable(persist_history):
             await persist_history()
+        await self._enforce_cost_budget(turn.turn_id)
 
     async def _await_task(self, turn: _ActiveTurn) -> None:
         if turn.task is not None:
             await turn.task
 
     async def _cancel_task(self, turn: _ActiveTurn) -> None:
-        if turn.task is not None and not turn.task.done():
-            turn.task.cancel()
-        if turn.task is not None:
+        task = turn.task
+        if task is None:
+            return
+        turn.cancelled = True
+        turn.cancellation.set()
+        await self._drain_directive_commits()
+        pending = await self._cancel_tasks_bounded({task})
+        self._turn_tasks.discard(task)
+        turn.task = None
+        if task in pending:
+            self._supervise_detached_task(task)
+        else:
             try:
-                await turn.task
+                task.result()
             except asyncio.CancelledError:
                 pass
+
+    def _create_turn_task(
+        self, awaitable: Coroutine[Any, Any, None]
+    ) -> asyncio.Task[None]:
+        task: asyncio.Task[None] = asyncio.create_task(awaitable)
+        self._turn_tasks.add(task)
+        task.add_done_callback(self._turn_tasks.discard)
+        return task
+
+    async def _cancel_tasks_bounded(
+        self, tasks: set[asyncio.Task]
+    ) -> set[asyncio.Task]:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        pending = {task for task in tasks if not task.done()}
+        for _ in range(MAX_TASK_CLEANUP_TURNS):
+            if not pending:
+                break
             await asyncio.sleep(0)
+            pending = {task for task in pending if not task.done()}
+        if pending:
+            self._emit_task_cleanup(detached_count=len(pending))
+        return pending
+
+    async def _cancel_session_tasks(self) -> tuple[BaseException, ...]:
+        await self._drain_directive_commits()
+        tasks = set(self._turn_tasks | self._prefetch_tasks)
+        pending = await self._cancel_tasks_bounded(tasks)
+        for task in pending:
+            self._supervise_detached_task(task)
+        errors: list[BaseException] = []
+        done = tasks - pending
+        for task in done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                continue
+            except Exception as exc:
+                errors.append(exc)
+        self._turn_tasks.difference_update(tasks)
+        self._prefetch_tasks.difference_update(tasks)
+        if errors:
+            self._emit_task_cleanup(error_count=len(errors))
+        return tuple(errors)
+
+    async def _close_event_stream(self) -> None:
+        events = self._event_stream
+        self._event_stream = None
+        if events is None:
+            return
+        close = getattr(events, "aclose", None)
+        if callable(close):
+            await close()
+
+    def _supervise_detached_task(self, task: asyncio.Task) -> None:
+        if task in self._detached_tasks:
+            return
+        self._detached_tasks.add(task)
+        task.add_done_callback(self._finish_detached_task)
+
+    def _finish_detached_task(self, task: asyncio.Task) -> None:
+        self._detached_tasks.discard(task)
+        try:
+            task.result()
+        except (asyncio.CancelledError, Exception):
+            return
+
+    def _emit_task_cleanup(
+        self, *, detached_count: int = 0, error_count: int = 0
+    ) -> None:
+        if not self.tracer.enabled:
+            return
+        at_ms = max(0, int(self.clock.monotonic() * 1000))
+        try:
+            self.tracer.span(
+                session_id=self.session_id,
+                turn_id=None,
+                span_id=self.tracer.new_id(),
+                name="session.task_cleanup",
+                status="error",
+                started_at_ms=at_ms,
+                ended_at_ms=at_ms,
+                attributes={
+                    "task.detached_count": str(detached_count),
+                    "task.error_count": str(error_count),
+                },
+            )
+        except Exception:
+            return
 
     def _adopt_background_task(self, turn: _ActiveTurn, task: asyncio.Task) -> None:
-        turn.background_tasks.add(task)
+        if len(self._background_tasks) >= MAX_SESSION_BACKGROUND_TASKS:
+            task.cancel()
+            self._supervise_detached_task(task)
+            self._background_capacity_exceeded = True
+            self._emit_task_cleanup(error_count=1)
+            return
         self._background_tasks.add(task)
 
         def _finish(done: asyncio.Task) -> None:
-            turn.background_tasks.discard(done)
             self._background_tasks.discard(done)
             try:
                 result = done.result()
@@ -735,8 +984,6 @@ class VoiceSession:
                 return
             elapsed_ms = getattr(result, "elapsed_ms", 0.0)
             turn.mcp_tools_ms += elapsed_ms
-            if turn.record is not None:
-                turn.record.waterfall.mcp_tools_ms += elapsed_ms
 
         task.add_done_callback(_finish)
 
@@ -808,27 +1055,25 @@ class VoiceSession:
             rag_cache_hit=turn.rag_cache_hit,
         )
 
-    def _emit_session_cost(self, started_ms: int, ended_ms: int) -> None:
+    def _priced_session_usage(
+        self, started_ms: int, ended_ms: int
+    ) -> Optional[PricedVoiceUsage]:
         duration_ms = ended_ms - started_ms
         if not 0 <= duration_ms <= MAX_CONTROL_DURATION_MS:
             self._drop_pricing_fact()
-            return
+            return None
         try:
             duration_minutes = duration_ms / 60_000.0
-            usage = VoiceUsage(
-                llm_prompt_tokens=self._llm_prompt_tokens,
-                llm_cached_prompt_tokens=self._llm_cached_prompt_tokens,
-                llm_completion_tokens=self._llm_completion_tokens,
-                stt_audio_ms=self._stt_audio_ms,
-                tts_characters=self._tts_characters,
-                tts_audio_ms=self._tts_audio_ms,
-                telephony_minutes=duration_minutes,
-                telephony_direction=self.telephony_direction,
-                rag_requests=self._rag_requests,
-                mcp_tool_calls=self._mcp_tool_calls,
-                infra_minutes=duration_minutes,
-            )
-            priced_usage: PricedVoiceUsage = self.pricebook.calculate(usage)
+            return self.pricebook.calculate(self._voice_usage(duration_minutes))
+        except (OverflowError, ValueError):
+            self._drop_pricing_fact()
+            return None
+
+    def _emit_session_cost(self, started_ms: int, ended_ms: int) -> None:
+        priced_usage = self._priced_session_usage(started_ms, ended_ms)
+        if priced_usage is None:
+            return
+        try:
             if self.tracer.enabled:
                 self.tracer.cost(
                     session_id=self.session_id,
@@ -838,6 +1083,162 @@ class VoiceSession:
                 )
         except (OverflowError, ValueError):
             self._drop_pricing_fact()
+
+    def _voice_usage(self, duration_minutes: float) -> VoiceUsage:
+        return VoiceUsage(
+            llm_prompt_tokens=self._llm_prompt_tokens,
+            llm_cached_prompt_tokens=self._llm_cached_prompt_tokens,
+            llm_completion_tokens=self._llm_completion_tokens,
+            stt_audio_ms=self._stt_audio_ms,
+            tts_characters=self._tts_characters,
+            tts_audio_ms=self._tts_audio_ms,
+            telephony_minutes=duration_minutes,
+            telephony_direction=self.telephony_direction,
+            rag_requests=self._rag_requests,
+            mcp_tool_calls=self._mcp_tool_calls,
+            infra_minutes=duration_minutes,
+        )
+
+    def _account_turn_usage(self, turn: _ActiveTurn) -> None:
+        if turn.usage is None or turn.usage_accounted:
+            return
+        self._llm_prompt_tokens = self._checked_usage_add(
+            self._llm_prompt_tokens,
+            turn.usage.prompt_tokens,
+            MAX_USAGE_UNITS,
+        )
+        self._llm_cached_prompt_tokens = self._checked_usage_add(
+            self._llm_cached_prompt_tokens,
+            turn.usage.cached_prompt_tokens,
+            MAX_USAGE_UNITS,
+        )
+        self._llm_completion_tokens = self._checked_usage_add(
+            self._llm_completion_tokens,
+            turn.usage.completion_tokens,
+            MAX_USAGE_UNITS,
+        )
+        turn.usage_accounted = True
+
+    def _priced_budget_usage(self) -> Optional[PricedVoiceUsage]:
+        elapsed_seconds = self.clock.monotonic() - self._session_clock_start
+        max_elapsed_seconds = MAX_CONTROL_DURATION_MS / 1000.0
+        if not math.isfinite(elapsed_seconds) or elapsed_seconds < 0:
+            elapsed_seconds = max_elapsed_seconds
+        else:
+            elapsed_seconds = min(elapsed_seconds, max_elapsed_seconds)
+        try:
+            return self.pricebook.calculate(self._voice_usage(elapsed_seconds / 60.0))
+        except (OverflowError, ValueError):
+            return None
+
+    async def _enforce_cost_budget(self, turn_id: Optional[str]) -> None:
+        if self._budget_ended:
+            return
+        notices = self._record_budget_cost()
+        await self._apply_budget_notices(notices, turn_id=turn_id)
+
+    def _record_budget_cost(self) -> tuple[BudgetNotice, ...]:
+        if self.budget_controller is None or self.agent_id is None:
+            return ()
+        if not self.budget_controller.policy.has_usd_limits:
+            return ()
+        priced_usage = self._priced_budget_usage()
+        if priced_usage is None:
+            return ()
+        current_total = priced_usage.cost.total_cost
+        assert self._budget_lease is not None
+        amount_usd = max(0.0, current_total - self._budget_accounted_usd)
+        if amount_usd == 0:
+            return ()
+        notices = self.budget_controller.record_cost(self._budget_lease, amount_usd)
+        self._budget_accounted_usd = max(self._budget_accounted_usd, current_total)
+        return notices
+
+    async def _apply_budget_notices(
+        self,
+        notices: Sequence[BudgetNotice],
+        *,
+        turn_id: Optional[str],
+    ) -> None:
+        hard = any(notice.level == BudgetLevel.HARD for notice in notices)
+        if hard and not self._budget_ended:
+            await self._end_for_budget(turn_id)
+
+    async def _end_for_budget(self, turn_id: Optional[str]) -> None:
+        if self._budget_ended:
+            return
+        self._budget_ended = True
+        await self._send_directive(
+            Envelope(
+                type="session.end",
+                session_id=self.session_id,
+                turn_id=turn_id,
+                seq=0,
+                ts_ms=0,
+            ),
+            SessionEnd(reason="budget_exceeded"),
+        )
+
+    async def _send_directive(
+        self, envelope: Envelope, payload: object, *, turn: _ActiveTurn | None = None
+    ) -> bool:
+        if self._closed or (turn is not None and turn.cancelled):
+            return False
+        task = asyncio.create_task(self.transport.send(envelope, payload))
+        self._directive_tasks.add(task)
+        deadline = self.clock.monotonic() + self.budgets.control_commit_ms / 1000.0
+        try:
+            committed = await self._await_directive_commit(task, deadline)
+        except asyncio.CancelledError as primary_error:
+            try:
+                await self._await_directive_commit(task, deadline)
+            except BaseException as cleanup_error:
+                primary_error.__context__ = cleanup_error
+            raise
+        finally:
+            self._directive_tasks.discard(task)
+        return committed and not self._closed and (turn is None or not turn.cancelled)
+
+    async def _drain_directive_commits(self) -> None:
+        while self._directive_tasks:
+            tasks = set(self._directive_tasks)
+            deadline = self.clock.monotonic() + self.budgets.control_commit_ms / 1000.0
+            for task in tasks:
+                await self._await_directive_commit(task, deadline)
+            self._directive_tasks.difference_update(tasks)
+            await asyncio.sleep(0)
+
+    async def _await_directive_commit(
+        self, task: asyncio.Task, deadline: float
+    ) -> bool:
+        while not task.done() and self.clock.monotonic() < deadline:
+            await asyncio.sleep(0)
+        if not task.done():
+            await self._abort_transport()
+            for _ in range(MAX_TASK_CLEANUP_TURNS):
+                if task.done():
+                    break
+                await asyncio.sleep(0)
+            pending = (
+                await self._cancel_tasks_bounded({task}) if not task.done() else set()
+            )
+            if task in pending:
+                self._supervise_detached_task(task)
+            elif task.done():
+                await asyncio.gather(task, return_exceptions=True)
+            return False
+        await task
+        return True
+
+    async def _abort_transport(self) -> None:
+        abort = getattr(self.transport, "abort", None)
+        if not callable(abort):
+            abort = getattr(self.transport, "close", None)
+        if not callable(abort):
+            return
+        result = abort()
+        if inspect.isawaitable(result):
+            await result
 
     def _record_playback_duration(
         self, turn: _ActiveTurn, playback: TtsPlayback, ended_ms: int

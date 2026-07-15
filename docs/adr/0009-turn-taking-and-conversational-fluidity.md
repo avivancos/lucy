@@ -6,10 +6,11 @@ Accepted
 
 ## Context
 
-Lucy is a turn-based, voice-first conversational framework with a funnel. It already
-handles turns and barge-in (`RealtimeVoicePipeline` in `src/lucy/voice.py`) and a
-funnel (`FunnelStage`, `FunnelEvent`). This ADR formalizes the turn lifecycle and the
-fluidity toolset as the spine of the framework so a voice LLM agent feels fluid.
+Lucy is a turn-based, voice-first conversational framework with a funnel. When this
+decision was proposed, turn handling lived in the `RealtimeVoicePipeline` prototype.
+The current event-plane runtime is `VoiceSession` in `src/lucy/session.py`; it owns
+live turns, barge-in, speculative work, and streaming directives. This ADR formalizes
+that lifecycle and fluidity toolset as the spine of the framework.
 
 ## Decision
 
@@ -18,17 +19,20 @@ speculative context and response, streaming TTS, and barge-in or interruption
 handling.
 
 The conversational fluidity toolset includes configurable endpointing and turn
-detection, barge-in (already in `src/lucy/voice.py`), interruption styles (already in
+detection, barge-in (implemented by `VoiceSession`), interruption styles (already in
 `VoiceModulationSpec.interruption_style`), backchannels and fillers, and speculative
 response on partial transcripts. Every stage is deadline-bounded through the
-`GraphExecutor` (`src/lucy/runtime.py`).
+typed event-plane settings and cancellation owned by `VoiceSession`. Cognition
+nodes run through `GraphExecutor` (`src/lucy/runtime.py`), which applies their
+deadlines and fallbacks.
 
 Each completed turn feeds the funnel (`FunnelStage` and `FunnelEvent`) and emits a
 per-turn `LatencyWaterfall`, keeping the framework turn-based and funnel-driven.
 
 ## Consequences
 
-- Turn-lifecycle stages map to `GraphNode`s with deadlines and fallbacks in
+- Event-plane lifecycle controls remain framework-owned streaming behavior;
+  cognition stages map to `GraphNode`s with deadlines and fallbacks in
   `src/lucy/runtime.py`.
 - Funnel transitions are turn outcomes; the framework stays turn-based and funnel-
   driven.

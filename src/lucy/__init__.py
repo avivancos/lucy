@@ -7,6 +7,13 @@ is supported and documented. Internal modules stay importable but unadvertised.
 __version__ = "0.1.0"
 
 from lucy.agent import VoiceAgent
+from lucy.budget import (
+    BudgetController,
+    BudgetExceeded,
+    BudgetMeteringError,
+    BudgetPolicy,
+    BudgetedLlmProvider,
+)
 from lucy.mcp import McpClient
 from lucy.observe import configure
 from lucy.providers import Capability, ModelRegistry
@@ -52,6 +59,12 @@ __all__ = [
     "SentimentLabel",
     # facade
     "VoiceAgent",
+    # local cost governance
+    "BudgetPolicy",
+    "BudgetController",
+    "BudgetedLlmProvider",
+    "BudgetExceeded",
+    "BudgetMeteringError",
     # runtime
     "GraphExecutor",
     "GraphNode",

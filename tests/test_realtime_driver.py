@@ -31,6 +31,7 @@ from lucy.llm import (
 )
 from lucy.mcp import McpClient
 from lucy.providers import LOCAL_PROVIDER_NAME, default_model_registry
+from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets
 from lucy.specs import AgentSpec, LucySpec, VoiceSpec
 from lucy.testing import (
@@ -360,6 +361,75 @@ async def test_cancelling_run_turn_calls_session_interrupt_no_orphan_tasks():
     await asyncio.sleep(0)
     assert simulator.session.interrupted
     assert asyncio.all_tasks() == before
+
+
+async def test_cancelled_realtime_turn_cannot_dispatch_late_mcp_tool():
+    class LateSession:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.cancelled = asyncio.Event()
+            self.interrupted = False
+            self.received_tool_results = []
+
+        async def events(self):
+            self.started.set()
+            while not self.release.is_set():
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    self.cancelled.set()
+            yield ToolCallReady("late-call", "book_meeting", {"day": "Tue"})
+            yield RealtimeAssistantDone("late-utterance", "")
+
+        async def send_tool_result(self, result):
+            self.received_tool_results.append(result)
+
+        async def interrupt(self):
+            self.interrupted = True
+
+        async def close(self):
+            pass
+
+    class LateProvider:
+        def __init__(self, session) -> None:
+            self.session = session
+
+        async def open(self, config):
+            del config
+            return self.session
+
+    clock = ManualClock()
+    tool = _tool()
+    transport = LocalMcpCommandTransport()
+    late_session = LateSession()
+    driver = RealtimeTurnDriver(
+        LateProvider(late_session),
+        _config([tool]),
+        default_model_registry(),
+        clock,
+        LatencyBudgets(),
+        tool_executor=McpToolExecutor(
+            McpClient(transport, allowed_tools=[tool.key]), clock
+        ),
+        tools=[tool],
+    )
+    context = TurnContext(clock=clock)
+    task = asyncio.create_task(
+        _collect(driver.run_turn("hello", [], turn_context=context))
+    )
+    await late_session.started.wait()
+
+    context.cancellation.set()
+    task.cancel()
+    await late_session.cancelled.wait()
+    late_session.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert late_session.interrupted is True
+    assert late_session.received_tool_results == []
+    assert transport.commands == []
 
 
 async def test_pre_and_post_hooks_run_in_order_on_transcript_events():

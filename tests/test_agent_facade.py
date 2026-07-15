@@ -37,6 +37,12 @@ CURATED_SURFACE = {
     "SentimentLabel",
     # facade
     "VoiceAgent",
+    # local cost governance
+    "BudgetPolicy",
+    "BudgetController",
+    "BudgetedLlmProvider",
+    "BudgetExceeded",
+    "BudgetMeteringError",
     # runtime
     "GraphExecutor",
     "GraphNode",
