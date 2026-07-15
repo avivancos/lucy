@@ -43,11 +43,23 @@ Supporting contracts:
   channel schema are identical for both.
 - The control channel between the media plane and Python is a versioned
   WebSocket protocol carrying events and directives only - never audio frames
-  (ADR 0004). The media plane forks audio directly to STT/TTS providers.
+  (ADR 0004). The media plane forks audio directly to STT/TTS providers. Every
+  registered Python-to-gateway payload belongs to the typed
+  `DownstreamDirective` union and leaves a graph in emission order; graph-local
+  events and audio-like objects never enter that contract. TTS remains on its
+  playback and usage-accounting path while sharing ordering with other controls.
 - Latency budgets live in typed settings, never hardcoded. Speculative
   mechanisms (RAG prefetch on partials, speculative LLM start on stable
   partials with abort-on-revision, sentence-streaming TTS, prompt caching) are
-  configuration-gated.
+  configuration-gated. A speculative graph buffers every downstream directive
+  until promotion. Graph controls require an exact normalized final transcript;
+  a prefix extension or revision cancels the partial graph, discards its queued
+  side effects, and reruns from the final transcript.
+- `SessionEnd` and `TtsStreamEnd` are terminal within a graph turn: any later
+  downstream directive is rejected. `SessionEnd` bypasses playback waiting,
+  ends the local gateway call without a runtime-owned trailing stream-end, and
+  prevents later scenario turns. Closing a driver stream for any reason cancels
+  and awaits its graph invocation and queue waiter.
 - Session shutdown cancels active turn and speculative prefetch tasks, but
   bounds cooperative cleanup to a named number of event-loop turns. A task that
   ignores cancellation is detached, retained in supervised accounting until it

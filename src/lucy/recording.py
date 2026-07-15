@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Callable, Dict, List, Optional, Protocol, Union, runtime_checkable
 from urllib.parse import quote
+from weakref import ReferenceType, ref
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import TypeAdapter
@@ -21,6 +22,7 @@ from lucy.transport.schema import (
     OpaqueRecordingRef,
     RecordingFailed,
     RecordingStart,
+    RecordingStop,
     RecordingUploaded,
 )
 
@@ -229,6 +231,10 @@ class RecordingCoordinator:
         self._id_factory = id_factory or _opaque_uuid
         self._planned: Dict[str, tuple[str, RecordingStart]] = {}
         self._reserved_recording_ids: set[str] = set()
+        self._claimed_controls: Dict[
+            int, ReferenceType[Union[RecordingStart, RecordingStop]]
+        ] = {}
+        self._issued_stops: Dict[str, tuple[str, RecordingStop]] = {}
 
     async def start(
         self, session_id: str, *, consent_ref: Optional[str] = None
@@ -307,23 +313,26 @@ class RecordingCoordinator:
             raise
         return directives
 
-    async def recording_uploaded(self, event: RecordingUploaded) -> bool:
+    async def recording_uploaded(
+        self, event: RecordingUploaded, *, session_id: str
+    ) -> bool:
         correlated_id = self._recording_id_for_upload(event)
         if correlated_id is None:
+            return False
+        correlated_plan = self._planned.get(correlated_id)
+        if correlated_plan is None or correlated_plan[0] != session_id:
             return False
         if correlated_id != event.recording_id:
             await self.cancel(correlated_id)
             return False
-        plan = self._planned.get(event.recording_id)
-        if plan is None:
-            return False
-        session_id, planned = plan
+        _, planned = correlated_plan
         if not self._matches(
             planned, event
         ) or not await self.blob_store.confirm_upload(event):
             await self.cancel(event.recording_id)
             return False
         self._planned.pop(event.recording_id, None)
+        self._forget_plan_controls(event.recording_id)
         self.tracer.audio_ref(
             session_id=session_id,
             blob_id=event.blob_id,
@@ -338,7 +347,58 @@ class RecordingCoordinator:
         )
         return True
 
-    async def recording_failed(self, event: RecordingFailed) -> bool:
+    def authorizes_control(
+        self, session_id: str, directive: Union[RecordingStart, RecordingStop]
+    ) -> bool:
+        """Authorize only controls created by this coordinator for the session."""
+        plan = self._planned.get(directive.recording_id)
+        if plan is None or plan[0] != session_id:
+            return False
+        if isinstance(directive, RecordingStart):
+            return plan[1] is directive
+        issued = self._issued_stops.get(directive.recording_id)
+        return issued is not None and issued[0] == session_id and issued[1] is directive
+
+    def stop(self, session_id: str, recording_id: str) -> Optional[RecordingStop]:
+        """Issue a session-bound stop control for an active recording plan."""
+        plan = self._planned.get(recording_id)
+        if plan is None or plan[0] != session_id:
+            return None
+        issued = self._issued_stops.get(recording_id)
+        if issued is not None:
+            return issued[1]
+        directive = RecordingStop(recording_id=recording_id)
+        self._issued_stops[recording_id] = (session_id, directive)
+        return directive
+
+    def claim_control(
+        self, session_id: str, directive: Union[RecordingStart, RecordingStop]
+    ) -> bool:
+        """Atomically authorize one dispatch and reject replayed controls."""
+        if not self.authorizes_control(session_id, directive):
+            return False
+        identity = id(directive)
+        claimed = self._claimed_controls.get(identity)
+        if claimed is not None and claimed() is directive:
+            return False
+        if claimed is not None and claimed() is not None:
+            return False
+
+        def discard_claim(
+            reference: ReferenceType[Union[RecordingStart, RecordingStop]],
+        ) -> None:
+            if self._claimed_controls.get(identity) is reference:
+                self._claimed_controls.pop(identity, None)
+
+        self._claimed_controls[identity] = ref(directive, discard_claim)
+        return True
+
+    async def recording_failed(
+        self, event: RecordingFailed, *, session_id: str
+    ) -> bool:
+        plan = self._planned.get(event.recording_id)
+        if plan is None or plan[0] != session_id:
+            return False
         return await self.cancel(event.recording_id)
 
     async def cancel(self, recording_id: str) -> bool:
@@ -363,7 +423,11 @@ class RecordingCoordinator:
                 raise cancellation
             raise RecordingCleanupError("recording cleanup failed", errors)
         self._planned.pop(recording_id, None)
+        self._forget_plan_controls(recording_id)
         return True
+
+    def _forget_plan_controls(self, recording_id: str) -> None:
+        self._issued_stops.pop(recording_id, None)
 
     def _recording_allowed(self, session_id: str, consent_ref: Optional[str]) -> bool:
         return (

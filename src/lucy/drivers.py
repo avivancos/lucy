@@ -1,9 +1,9 @@
 """Turn drivers (ADR 0011): turn stt.final text into spoken directives.
 
-`TurnDriver.run_turn` yields zero or more ``TtsSpeak`` directives (one per
-flushed clause, so the first clause speaks while generation continues) then
-exactly one terminal :class:`TurnDriverReport`. `CascadedTurnDriver` is the
-cascaded path (STT -> LLM stream -> sentence TTS). With a
+`TurnDriver.run_turn` yields zero or more typed downstream directives then
+exactly one terminal :class:`TurnDriverReport`. `CascadedTurnDriver` emits only
+``TtsSpeak`` clauses so the first clause speaks while generation continues;
+`GraphTurnDriver` also carries graph control directives. With a
 :class:`~lucy.tools.McpToolExecutor` wired in it also runs bounded tool rounds
 (card 34): a mid-stream tool call is masked by one concurrent filler
 utterance, the typed result is fed back, and generation resumes. Speculation
@@ -26,6 +26,7 @@ from typing import (
     Sequence,
     TYPE_CHECKING,
     Union,
+    cast,
     runtime_checkable,
 )
 
@@ -59,7 +60,12 @@ from lucy.speech import MIN_FLUSH_CHARS, SentenceAssembler, TtsPlanner
 from lucy.state import Checkpoint, CheckpointStore, ConversationState, TranscriptLine
 from lucy.state import checkpoint_id
 from lucy.tools import BargeInPolicy, FillerPolicy, McpToolExecutor, ToolDef, ToolResult
-from lucy.transport.schema import TtsSpeak
+from lucy.transport.schema import (
+    DownstreamDirective,
+    SessionEnd,
+    TtsStreamEnd,
+    is_downstream_directive,
+)
 
 if TYPE_CHECKING:
     from lucy.budget import BudgetBinding
@@ -78,7 +84,11 @@ class TurnDriverReport:
     rag_requests: int = 0
 
 
-DriverEvent = Union[TtsSpeak, TurnDriverReport]
+DriverEvent = Union[DownstreamDirective, TurnDriverReport]
+
+
+class DirectiveOrderError(RuntimeError):
+    """Raised when a driver emits a control after a terminal directive."""
 
 
 def _raise_if_turn_cancelled(turn_context: object | None) -> None:
@@ -528,6 +538,8 @@ class RealtimeTurnDriver:
 
 
 class GraphTurnDriver:
+    requires_exact_speculative_promotion = True
+
     def __init__(
         self,
         graph: "CompiledAgentGraph[ConversationState]",
@@ -580,11 +592,19 @@ class GraphTurnDriver:
                 },
             }
         )
-        queue: "asyncio.Queue[TtsSpeak]" = asyncio.Queue()
+        queue: "asyncio.Queue[DownstreamDirective]" = asyncio.Queue()
+
+        terminal_emitted = False
 
         def emit(event: object) -> None:
-            if isinstance(event, TtsSpeak):
-                queue.put_nowait(event)
+            nonlocal terminal_emitted
+            if is_downstream_directive(event):
+                if terminal_emitted:
+                    raise DirectiveOrderError(
+                        "downstream control emitted after terminal directive"
+                    )
+                queue.put_nowait(cast(DownstreamDirective, event))
+                terminal_emitted = isinstance(event, (SessionEnd, TtsStreamEnd))
 
         outer_context = turn_context if isinstance(turn_context, TurnContext) else None
         ctx = TurnContext(
@@ -619,6 +639,7 @@ class GraphTurnDriver:
         )
         task = asyncio.create_task(self.graph.invoke_turn(working_state, ctx))
         final_state: Optional[ConversationState] = None
+        get_task: Optional[asyncio.Task[DownstreamDirective]] = None
         try:
             while True:
                 if task.done() and queue.empty():
@@ -639,11 +660,14 @@ class GraphTurnDriver:
                     if item is get_task and not get_task.done():
                         get_task.cancel()
                         await asyncio.gather(get_task, return_exceptions=True)
-        except asyncio.CancelledError:
+                get_task = None
+        finally:
+            if get_task is not None and not get_task.done():
+                get_task.cancel()
+                await asyncio.gather(get_task, return_exceptions=True)
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            raise
 
         if final_state is None:
             final_state = task.result()

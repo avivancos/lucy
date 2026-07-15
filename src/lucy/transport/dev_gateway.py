@@ -34,6 +34,7 @@ from lucy.transport.schema import (
     ControlEvent,
     Dtmf,
     Envelope,
+    SessionEnd,
     SessionEnded,
     SessionStarted,
     RecordingFailed,
@@ -114,6 +115,7 @@ class LocalGatewaySimulator:
         self.sent: list[ControlEvent] = []
         self.directives: list[object] = []
         self._seq = 0
+        self._session_end_reason: Optional[str] = None
         # Virtual time seeded from the injected clock; it then advances by budget
         # increments per event (no wall-clock sleeping, so tests stay deterministic).
         self._ts_ms = int(self.clock.monotonic() * 1000)
@@ -303,6 +305,12 @@ class LocalGatewaySimulator:
                 # barrier so nothing leaks into the next turn (card 64). The
                 # session guarantees the barrier even for a cancelled turn.
                 await self._collect_turn_directives(turn_id)
+                if self._session_end_reason is not None:
+                    yield self._emit(
+                        "session.ended",
+                        SessionEnded(reason=self._session_end_reason),
+                    )
+                    return
                 continue
             async for event in self._agent_response(
                 turn_id, interrupt=index in self.barge_in_turns
@@ -310,6 +318,12 @@ class LocalGatewaySimulator:
                 yield event
                 async for recording_event in self._drain_recording_events():
                     yield recording_event
+            if self._session_end_reason is not None:
+                yield self._emit(
+                    "session.ended",
+                    SessionEnded(reason=self._session_end_reason),
+                )
+                return
 
         async for recording_event in self._drain_recording_events():
             yield recording_event
@@ -371,6 +385,9 @@ class LocalGatewaySimulator:
             if isinstance(directive, TtsSpeak):
                 utterances.append(directive)
             elif isinstance(directive, TtsStreamEnd):
+                return utterances
+            elif isinstance(directive, SessionEnd):
+                self._session_end_reason = directive.reason
                 return utterances
             # Other directives, including tts.cancel, do not end collection.
 

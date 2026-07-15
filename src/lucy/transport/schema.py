@@ -10,7 +10,7 @@ build against.
 
 from __future__ import annotations
 
-from typing import Annotated, Dict, List, Literal, NamedTuple, Optional, Type
+from typing import Annotated, Dict, List, Literal, NamedTuple, Optional, Type, Union
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
@@ -225,6 +225,23 @@ class RecordingStop(_Strict):
     recording_id: OpaqueRecordingRef
 
 
+DownstreamDirective = Union[
+    SessionConfigure,
+    TtsSpeak,
+    TtsCancel,
+    TtsStreamEnd,
+    RealtimeConnect,
+    RealtimeToolResult,
+    DtmfSend,
+    Transfer,
+    Dial,
+    Hold,
+    SessionEnd,
+    RecordingStart,
+    RecordingStop,
+]
+
+
 UPSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "session.started": SessionStarted,
     "vad.speech_start": VadSpeechStart,
@@ -257,6 +274,7 @@ DOWNSTREAM_TYPES: Dict[str, Type[BaseModel]] = {
     "recording.start": RecordingStart,
     "recording.stop": RecordingStop,
 }
+DOWNSTREAM_TYPE_BY_MODEL = {model: name for name, model in DOWNSTREAM_TYPES.items()}
 
 MESSAGE_TYPES: Dict[str, Type[BaseModel]] = {**UPSTREAM_TYPES, **DOWNSTREAM_TYPES}
 
@@ -268,6 +286,19 @@ class UnknownControlMessage(ValueError):
 class ControlEvent(NamedTuple):
     envelope: Envelope
     payload: BaseModel
+
+
+def downstream_type(payload: DownstreamDirective) -> str:
+    """Return the registered v1 wire name for a downstream directive."""
+    type_name = DOWNSTREAM_TYPE_BY_MODEL.get(type(payload))
+    if type_name is None:
+        raise TypeError("payload is not a registered downstream directive")
+    return type_name
+
+
+def is_downstream_directive(payload: object) -> bool:
+    """Return whether ``payload`` is registered on the v1 downstream wire."""
+    return type(payload) in DOWNSTREAM_TYPE_BY_MODEL
 
 
 def parse_event(raw: Dict[str, object]) -> ControlEvent:

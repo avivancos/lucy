@@ -22,8 +22,17 @@ Recording support is additive to the control-channel schema:
 
 - The gateway advertises capabilities in `SessionStarted.features`.
 - Python sends `recording.start` and `recording.stop` directives.
+- Those directives are in-process capabilities, not freely constructible
+  commands. `RecordingCoordinator` must issue the exact control instance for
+  the active session, and `VoiceSession` atomically claims it once before
+  transport dispatch. Structural clones, controls from another session, and
+  replayed controls fail closed. A claim remains consumed after cancellation or
+  timeout because transport commit may be ambiguous.
 - The media gateway reports `recording.started`, `recording.uploaded`, and
-  `recording.failed` events.
+  `recording.failed` events. `VoiceSession` routes completion and failure to the
+  same coordinator so successful uploads emit `audio_ref` and failed plans clean
+  their prepared targets. The receiving session identity must match the plan
+  owner before either callback can confirm, attribute, or delete anything.
 - Each uploaded asset records leg, duration, byte count, hash, container, and
   consent reference.
 - The frozen `BlobStore.prepare_upload(blob_id)` ABI remains unchanged. Hosted

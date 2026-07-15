@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.observe import Tracer, get_tracer
+from lucy.transport.schema import DownstreamDirective
 
 
 NodeHandler = Callable[["GraphContext"], Awaitable[Any]]
@@ -41,7 +42,7 @@ class TurnContext(GraphContext):
     clock: Clock = field(default_factory=MonotonicClock)
     speculative: bool = False
     promoted: asyncio.Event = field(default_factory=asyncio.Event)
-    buffered_directives: List[Any] = field(default_factory=list)
+    buffered_directives: List[DownstreamDirective] = field(default_factory=list)
     current_user_in_state: bool = False
     rag_dispatch_observer: Optional[Callable[[], None]] = None
     mcp_dispatch_observer: Optional[Callable[[], None]] = None

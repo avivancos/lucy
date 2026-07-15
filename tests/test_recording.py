@@ -13,7 +13,9 @@ from fastapi import FastAPI, Response
 from pydantic import ValidationError
 
 from lucy.clock import ManualClock
-from lucy.evals import booking_happy_path
+from lucy.drivers import GraphTurnDriver
+from lucy.evals import SyntheticCallScenario, SyntheticTurn, booking_happy_path
+from lucy.graph import AgentGraph
 from lucy.observe import Tracer
 from lucy.recording import (
     LocalBlobStore,
@@ -22,7 +24,10 @@ from lucy.recording import (
     RecordingUploadTarget,
 )
 from lucy.specs import RecordingSpec
+from lucy.state import ConversationState
 from lucy.testing import InMemoryTraceExporter, RecordingBlobStoreSimulator
+from lucy.runtime import TurnContext
+from lucy.session import VoiceSession
 from lucy.transport.dev_gateway import LocalGatewaySimulator, _SignedUploadLogFilter
 from lucy.transport.schema import (
     Envelope,
@@ -214,6 +219,39 @@ def test_simulator_uploads_real_dual_leg_wavs_and_emits_audio_refs():
     assert result["metadata_matches"] is True
 
 
+def test_voice_session_routes_successful_recording_upload_to_coordinator():
+    result = asyncio.run(_live_recording_session())
+
+    assert result == {
+        "recording_event": "recording.uploaded",
+        "audio_refs": 1,
+        "prepared_count": 0,
+        "blob_count": 1,
+        "plan_closed": True,
+    }
+
+
+def test_voice_session_routes_recording_failure_to_coordinator_cleanup():
+    result = asyncio.run(_live_recording_session(upload_error_status=503))
+
+    assert result == {
+        "recording_event": "recording.failed",
+        "audio_refs": 0,
+        "prepared_count": 0,
+        "blob_count": 0,
+        "plan_closed": True,
+    }
+
+
+def test_recording_completion_and_failure_cannot_cross_sessions():
+    assert asyncio.run(_cross_session_recording_events()) == {
+        "uploaded_rejected": True,
+        "upload_plan_retained": True,
+        "failed_rejected": True,
+        "failure_plan_retained": True,
+    }
+
+
 def test_simulator_reports_unknown_upload_reference_without_creating_blob():
     store = LocalBlobStore("http://127.0.0.1:1")
     gateway = LocalGatewaySimulator(
@@ -236,7 +274,12 @@ def test_simulator_reports_unknown_upload_reference_without_creating_blob():
 
     assert isinstance(events[-1].payload, RecordingFailed)
     assert events[-1].payload.error_code == "upload_target_missing"
-    assert asyncio.run(coordinator.recording_failed(events[-1].payload)) is True
+    assert (
+        asyncio.run(
+            coordinator.recording_failed(events[-1].payload, session_id="sess_sim")
+        )
+        is True
+    )
     assert store.blob_count == 0
     assert store.prepared_count == 0
 
@@ -274,7 +317,10 @@ def test_coordinator_rejects_tampered_upload_metadata(field, value):
         consent_ref=directive.consent_ref,
     ).model_copy(update={field: value})
 
-    assert asyncio.run(coordinator.recording_uploaded(uploaded)) is False
+    assert (
+        asyncio.run(coordinator.recording_uploaded(uploaded, session_id="sess-1"))
+        is False
+    )
     tracer.flush()
     assert exporter.events == []
     if field in {"blob_id", "upload_url_ref"}:
@@ -311,7 +357,10 @@ def test_coordinator_rejects_fabricated_completion_without_uploaded_blob():
         consent_ref=directive.consent_ref,
     )
 
-    assert asyncio.run(coordinator.recording_uploaded(forged)) is False
+    assert (
+        asyncio.run(coordinator.recording_uploaded(forged, session_id="sess-forged"))
+        is False
+    )
     tracer.flush()
     assert exporter.events == []
     assert store.prepared_count == 0
@@ -461,7 +510,14 @@ def test_simulator_rejects_unsupported_container_and_non_loopback_upload():
     unsafe_events = asyncio.run(gateway.execute_recording(directive))
     assert unsafe_events[-1].payload.error_code == "upload_target_invalid"
     assert unsafe_events[-1].payload.retryable is False
-    assert asyncio.run(coordinator.recording_failed(unsafe_events[-1].payload)) is True
+    assert (
+        asyncio.run(
+            coordinator.recording_failed(
+                unsafe_events[-1].payload, session_id="sess-safe"
+            )
+        )
+        is True
+    )
     assert store.prepared_count == 0
 
 
@@ -565,6 +621,131 @@ def test_swapped_live_recording_id_cleans_upload_owner_not_claimed_plan():
     assert asyncio.run(_reject_swapped_live_recording_id()) == (False, 0, 1, True)
 
 
+async def _live_recording_session(upload_error_status=None):
+    async with _running_blob_store(upload_error_status=upload_error_status) as store:
+        exporter = InMemoryTraceExporter()
+        tracer = Tracer(exporters=[exporter], record_audio=True)
+        coordinator = RecordingCoordinator(
+            RecordingSpec(enabled=True, channels="mixed"),
+            store,
+            tracer,
+            id_factory=iter(["rec-live-session", "blob-live-session"]).__next__,
+        )
+        directive = (await coordinator.start("sess-live", consent_ref="consent-live"))[
+            0
+        ]
+
+        async def record_node(state: ConversationState, ctx: TurnContext):
+            assert ctx.emit is not None
+            ctx.emit(directive)
+            return {}
+
+        graph = (
+            AgentGraph[ConversationState]()
+            .add_node("record", record_node)
+            .set_entry("record")
+            .compile()
+        )
+        gateway = LocalGatewaySimulator(
+            SyntheticCallScenario(
+                name="live-recording",
+                objective="record one call",
+                turns=[SyntheticTurn(speaker="caller", text="record")],
+                expected_outcome="recorded",
+            ),
+            ManualClock(),
+            session_id="sess-live",
+            recording_upload_resolver=store.resolve_upload_target,
+        )
+        events = []
+
+        class ObservedTransport:
+            async def send(self, envelope, payload):
+                await gateway.send(envelope, payload)
+
+            async def events(self):
+                async for event in gateway.events():
+                    events.append(event)
+                    yield event
+
+        clock = ManualClock()
+        session = VoiceSession(
+            "sess-live",
+            ObservedTransport(),
+            None,
+            driver=GraphTurnDriver(graph, session_id="sess-live", clock=clock),
+            clock=clock,
+            tracer=tracer,
+            recording_coordinator=coordinator,
+        )
+
+        await session.run()
+        tracer.flush()
+        recording_event = next(
+            event.envelope.type
+            for event in events
+            if event.envelope.type in {"recording.uploaded", "recording.failed"}
+        )
+        plan_closed = not await coordinator.cancel(directive.recording_id)
+        return {
+            "recording_event": recording_event,
+            "audio_refs": sum(event.type == "audio_ref" for event in exporter.events),
+            "prepared_count": store.prepared_count,
+            "blob_count": store.blob_count,
+            "plan_closed": plan_closed,
+        }
+
+
+async def _cross_session_recording_events():
+    async with _running_blob_store() as store:
+        coordinator = RecordingCoordinator(
+            RecordingSpec(enabled=True, channels="mixed"),
+            store,
+            Tracer(exporters=[], record_audio=True),
+            id_factory=iter(
+                [
+                    "rec-upload-owner",
+                    "blob-upload-owner",
+                    "rec-failure-owner",
+                    "blob-failure-owner",
+                ]
+            ).__next__,
+        )
+        upload_plan = (await coordinator.start("owner-session", consent_ref="consent"))[
+            0
+        ]
+        gateway = LocalGatewaySimulator(
+            booking_happy_path(),
+            ManualClock(),
+            recording_upload_resolver=store.resolve_upload_target,
+        )
+        uploaded = (await gateway.execute_recording(upload_plan))[-1].payload
+        assert isinstance(uploaded, RecordingUploaded)
+        uploaded_rejected = not await coordinator.recording_uploaded(
+            uploaded, session_id="other-session"
+        )
+        upload_plan_retained = await coordinator.cancel(upload_plan.recording_id)
+
+        failure_plan = (
+            await coordinator.start("owner-session", consent_ref="consent")
+        )[0]
+        failed_rejected = not await coordinator.recording_failed(
+            RecordingFailed(
+                recording_id=failure_plan.recording_id,
+                error_code="gateway_failed",
+                retryable=False,
+            ),
+            session_id="other-session",
+        )
+        failure_plan_retained = await coordinator.cancel(failure_plan.recording_id)
+        return {
+            "uploaded_rejected": uploaded_rejected,
+            "upload_plan_retained": upload_plan_retained,
+            "failed_rejected": failed_rejected,
+            "failure_plan_retained": failure_plan_retained,
+        }
+
+
 async def _record_dual_leg_call():
     async with _running_blob_store() as store:
         exporter = InMemoryTraceExporter()
@@ -610,8 +791,14 @@ async def _record_dual_leg_call():
             assert recording_started.envelope.type == "recording.started"
             event = (await stream.__anext__()).payload
             assert isinstance(event, RecordingUploaded)
-            assert await coordinator.recording_uploaded(event) is True
-            assert await coordinator.recording_uploaded(event) is False
+            assert (
+                await coordinator.recording_uploaded(event, session_id="sess_sim")
+                is True
+            )
+            assert (
+                await coordinator.recording_uploaded(event, session_id="sess_sim")
+                is False
+            )
             uploaded.append(event)
         tracer.flush()
 
@@ -676,7 +863,7 @@ async def _failed_http_upload(status_code):
         directive = (await coordinator.start("sess_sim", consent_ref="consent"))[0]
         failed = (await gateway.execute_recording(directive))[-1].payload
         assert isinstance(failed, RecordingFailed)
-        assert await coordinator.recording_failed(failed) is True
+        assert await coordinator.recording_failed(failed, session_id="sess_sim") is True
         return {
             "error_code": failed.error_code,
             "retryable": failed.retryable,
@@ -704,10 +891,20 @@ async def _capture_gateway_upload_logs(upload_error_status):
         upload_url = store.resolve_upload_target(directive.upload_url_ref).url
         result = (await gateway.execute_recording(directive))[-1].payload
         if isinstance(result, RecordingUploaded):
-            assert await coordinator.recording_uploaded(result) is True
+            assert (
+                await coordinator.recording_uploaded(
+                    result, session_id="sess-log-redaction"
+                )
+                is True
+            )
         else:
             assert isinstance(result, RecordingFailed)
-            assert await coordinator.recording_failed(result) is True
+            assert (
+                await coordinator.recording_failed(
+                    result, session_id="sess-log-redaction"
+                )
+                is True
+            )
         return directive.upload_url_ref, upload_url
 
 
@@ -775,7 +972,10 @@ async def _late_recording_directive():
         events = [await stream.__anext__(), await stream.__anext__()]
         uploaded = events[-1].payload
         assert isinstance(uploaded, RecordingUploaded)
-        assert await coordinator.recording_uploaded(uploaded) is True
+        assert (
+            await coordinator.recording_uploaded(uploaded, session_id="sess_sim")
+            is True
+        )
         return [event.envelope.type for event in events]
 
 
@@ -897,7 +1097,7 @@ async def _timed_out_upload():
         await started.wait()
         failed = (await task)[-1].payload
         assert isinstance(failed, RecordingFailed)
-        await coordinator.recording_failed(failed)
+        await coordinator.recording_failed(failed, session_id="sess_sim")
         gate.set()
         return failed.error_code, failed.retryable, store.prepared_count
 
@@ -977,7 +1177,7 @@ async def _uploaded_then_failed():
             error_code="completion_ambiguous",
             retryable=True,
         )
-        assert await coordinator.recording_failed(failed) is True
+        assert await coordinator.recording_failed(failed, session_id="sess_sim") is True
         return store.prepared_count, store.blob_count
 
 
@@ -1026,7 +1226,9 @@ async def _reject_tampered_recording_id():
         uploaded = (await gateway.execute_recording(directive))[-1].payload
         assert isinstance(uploaded, RecordingUploaded)
         tampered = uploaded.model_copy(update={"recording_id": "rec-tampered"})
-        accepted = await coordinator.recording_uploaded(tampered)
+        accepted = await coordinator.recording_uploaded(
+            tampered, session_id="sess-real"
+        )
         return accepted, store.prepared_count, store.blob_count
 
 
@@ -1048,7 +1250,7 @@ async def _reject_swapped_live_recording_id():
         assert isinstance(uploaded, RecordingUploaded)
         swapped = uploaded.model_copy(update={"recording_id": agent.recording_id})
 
-        accepted = await coordinator.recording_uploaded(swapped)
+        accepted = await coordinator.recording_uploaded(swapped, session_id="sess-swap")
         blob_count = store.blob_count
         prepared_count = store.prepared_count
         claimed_plan_retained = await coordinator.cancel(agent.recording_id)

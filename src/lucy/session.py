@@ -27,6 +27,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    TYPE_CHECKING,
 )
 
 from lucy.budget import (
@@ -39,7 +40,7 @@ from lucy.budget import (
     BudgetNotice,
 )
 from lucy.clock import Clock, MonotonicClock
-from lucy.drivers import TurnDriver, TurnDriverReport
+from lucy.drivers import DirectiveOrderError, TurnDriver, TurnDriverReport
 from lucy.llm import LlmMessage, UsageReport, compute_cache_key
 from lucy.limits import (
     MAX_CONTROL_DURATION_MS,
@@ -80,7 +81,12 @@ from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
     BargeIn,
+    DownstreamDirective,
     Envelope,
+    RecordingFailed,
+    RecordingStart,
+    RecordingStop,
+    RecordingUploaded,
     SessionEnd,
     SessionEnded,
     SttFinal,
@@ -91,7 +97,11 @@ from lucy.transport.schema import (
     TtsStreamEnd,
     VadSpeechEnd,
     VadSpeechStart,
+    downstream_type,
 )
+
+if TYPE_CHECKING:
+    from lucy.recording import RecordingCoordinator
 
 Responder = Callable[[str], Awaitable[str]]
 
@@ -179,11 +189,14 @@ class SpeculationController:
         self._trigger_text = text
         self._task = task
 
-    async def reconcile(self, final: str) -> bool:
+    async def reconcile(self, final: str, *, require_exact: bool = False) -> bool:
         task = self._task
         trigger = _normalize_speculative_text(self._trigger_text)
         final_text = _normalize_speculative_text(final)
-        promoted = bool(task) and bool(trigger) and final_text.startswith(trigger)
+        text_matches = (
+            final_text == trigger if require_exact else final_text.startswith(trigger)
+        )
+        promoted = bool(task) and bool(trigger) and text_matches
         if task is not None and not promoted:
             task.cancel()
             try:
@@ -235,6 +248,7 @@ class _ActiveTurn:
     rag_result: Optional[RagResult] = None
     clock_start: float = 0.0
     barrier_sent: bool = False  # tts.stream_end sent exactly once per turn
+    session_end_sent: bool = False
     planner: Optional[TtsPlanner] = None  # set in driver mode
     task: "Optional[asyncio.Task[None]]" = None
     playback_finished: asyncio.Event = field(default_factory=asyncio.Event)
@@ -264,6 +278,7 @@ class VoiceSession:
         agent_id: Optional[str] = None,
         provider_attribution: Optional[Mapping[CostComponent, ProviderIdentity]] = None,
         provider_registry: Optional[ModelRegistry] = None,
+        recording_coordinator: Optional["RecordingCoordinator"] = None,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -277,6 +292,7 @@ class VoiceSession:
         self.budgets = budgets or LatencyBudgets()
         self.speculation = speculation or SpeculationSettings()
         self.rag = rag
+        self.recording_coordinator = recording_coordinator
         driver_pricebook = getattr(driver, "pricebook", None)
         if pricebook is not None and driver_pricebook is not None:
             raise ValueError(
@@ -627,7 +643,16 @@ class VoiceSession:
                     active.ended_ms = active.ended_ms or event.envelope.ts_ms
                     await self._cancel_task(active)
                     await self._complete(active, tree, records)
-                promoted = await controller.reconcile(payload.text)
+                promoted = await controller.reconcile(
+                    payload.text,
+                    require_exact=bool(
+                        getattr(
+                            self.driver,
+                            "requires_exact_speculative_promotion",
+                            False,
+                        )
+                    ),
+                )
                 if promoted and speculative_turn is not None:
                     active = speculative_turn
                     active.user_text = payload.text
@@ -635,13 +660,11 @@ class VoiceSession:
                     active.stt_final_ms = event.envelope.ts_ms
                     active.started_ms = max(0, event.envelope.ts_ms - payload.stt_ms)
                     if speculative_context is not None:
-                        speculative_context.speculative = False
                         speculative_context.promoted.set()
-                        for directive in speculative_context.buffered_directives:
-                            await self._send_tts_speak(
-                                active, directive, speculative_context
-                            )
-                        speculative_context.buffered_directives.clear()
+                        while speculative_context.buffered_directives:
+                            directive = speculative_context.buffered_directives.pop(0)
+                            await self._send_driver_directive(active, directive)
+                        speculative_context.speculative = False
                     await self._retrieve_rag(active)
                     if active.task is not None and active.task.done():
                         await self._await_task(active)
@@ -718,6 +741,18 @@ class VoiceSession:
                     await self._interrupt(active, event.envelope.ts_ms, tree, records)
                     active = None
 
+            elif isinstance(payload, RecordingUploaded):
+                if self.recording_coordinator is not None:
+                    await self.recording_coordinator.recording_uploaded(
+                        payload, session_id=self.session_id
+                    )
+
+            elif isinstance(payload, RecordingFailed):
+                if self.recording_coordinator is not None:
+                    await self.recording_coordinator.recording_failed(
+                        payload, session_id=self.session_id
+                    )
+
             elif isinstance(payload, SessionEnded):
                 break
 
@@ -755,7 +790,7 @@ class VoiceSession:
         """End-of-speech barrier: exactly once per turn, on every path (normal
         completion or cancellation), so the gateway simulator can drain the
         turn's directives deterministically (card 64)."""
-        if turn.barrier_sent:
+        if turn.barrier_sent or turn.session_end_sent:
             return
         sent = await self._send_directive(
             Envelope(
@@ -816,7 +851,7 @@ class VoiceSession:
                     if first_tts:
                         self._set_state(TurnState.SPEAKING)  # THINKING -> SPEAKING
                         first_tts = False
-                    await self._send_tts_speak(turn, event, context)
+                    await self._send_driver_directive(turn, event, context)
                 elif isinstance(event, TurnDriverReport):
                     turn.assistant_text = event.assistant_text
                     turn.llm_ms = event.llm_ms
@@ -827,6 +862,8 @@ class VoiceSession:
                     self._account_turn_usage(turn)
                     if self._requires_driver_usage and event.usage is None:
                         await self._end_for_budget(turn.turn_id)
+                else:
+                    await self._send_driver_directive(turn, event, context)
         except BudgetExceeded as exc:
             if exc.usage is not None:
                 turn.usage = exc.usage
@@ -842,8 +879,52 @@ class VoiceSession:
         finally:
             if context is None or not context.speculative:
                 await self._send_stream_end(turn)
-        if not turn.cancelled and (context is None or not context.speculative):
+        if (
+            not turn.cancelled
+            and not turn.session_end_sent
+            and (context is None or not context.speculative)
+        ):
             await turn.playback_finished.wait()
+
+    async def _send_driver_directive(
+        self,
+        turn: _ActiveTurn,
+        directive: DownstreamDirective,
+        context: TurnContext | None = None,
+    ) -> None:
+        if turn.session_end_sent or turn.barrier_sent:
+            raise DirectiveOrderError(
+                "downstream control received after terminal directive"
+            )
+        if isinstance(directive, TtsSpeak):
+            await self._send_tts_speak(turn, directive, context)
+            return
+        if context is not None and context.speculative:
+            context.buffered_directives.append(directive)
+            return
+        if isinstance(directive, (RecordingStart, RecordingStop)):
+            coordinator = self.recording_coordinator
+            if coordinator is None or not coordinator.claim_control(
+                self.session_id, directive
+            ):
+                raise PermissionError(
+                    "recording directive is not authorized for this session"
+                )
+        if isinstance(directive, SessionEnd):
+            turn.session_end_sent = True
+        if isinstance(directive, TtsStreamEnd):
+            turn.barrier_sent = True
+        await self._send_directive(
+            Envelope(
+                type=downstream_type(directive),
+                session_id=self.session_id,
+                turn_id=turn.turn_id,
+                seq=0,
+                ts_ms=0,
+            ),
+            directive,
+            turn=turn,
+        )
 
     async def _send_tts_speak(
         self,
