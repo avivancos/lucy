@@ -80,6 +80,69 @@ services:
     depends_on:
       - lucy-api
 
+  asterisk:
+    image: andrius/asterisk:22@sha256:cc5fce715ec241c588992fbc5372af3a1ae673c6fe48903a49d069223aab68da
+    profiles: ["telephony-lab"]
+    environment:
+      LUCY_TELEPHONY_ARI_PORT: ${LUCY_TELEPHONY_ARI_PORT:-8088}
+      LUCY_TELEPHONY_ARI_USER: ${LUCY_TELEPHONY_ARI_USER:-lucy-lab}
+      LUCY_TELEPHONY_ARI_PASSWORD: ${LUCY_TELEPHONY_ARI_PASSWORD:-lucy-lab-only}
+      LUCY_TELEPHONY_PJSIP_PORT: ${LUCY_TELEPHONY_PJSIP_PORT:-5060}
+      LUCY_TELEPHONY_PJSIP_USER: ${LUCY_TELEPHONY_PJSIP_USER:-lucy-lab}
+      LUCY_TELEPHONY_PJSIP_PASSWORD: ${LUCY_TELEPHONY_PJSIP_PASSWORD:-lucy-lab-only}
+      LUCY_TELEPHONY_RTP_PORT_START: ${LUCY_TELEPHONY_RTP_PORT_START:-10000}
+      LUCY_TELEPHONY_RTP_PORT_END: ${LUCY_TELEPHONY_RTP_PORT_END:-10019}
+      LUCY_TELEPHONY_AUDIO_SOCKET_HOST: ${LUCY_TELEPHONY_AUDIO_SOCKET_HOST:-lucy-media-gateway}
+      LUCY_TELEPHONY_AUDIO_SOCKET_PORT: ${LUCY_TELEPHONY_AUDIO_SOCKET_PORT:-9092}
+      LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS: ${LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS:-15}
+    entrypoint:
+      - python3
+      - /opt/lucy-asterisk/scripts/render_config.py
+    command:
+      - /usr/local/bin/entrypoint.sh
+      - /usr/sbin/asterisk
+      - -f
+      - -T
+      - -U
+      - asterisk
+      - -p
+    ports:
+      - "127.0.0.1:${LUCY_TELEPHONY_ARI_HOST_PORT:-18088}:${LUCY_TELEPHONY_ARI_PORT:-8088}"
+      - "127.0.0.1:${LUCY_TELEPHONY_SIP_HOST_PORT:-15060}:${LUCY_TELEPHONY_PJSIP_PORT:-5060}/udp"
+      - "127.0.0.1:${LUCY_TELEPHONY_RTP_PORT_START:-10000}-${LUCY_TELEPHONY_RTP_PORT_END:-10019}:${LUCY_TELEPHONY_RTP_PORT_START:-10000}-${LUCY_TELEPHONY_RTP_PORT_END:-10019}/udp"
+    volumes:
+      - ./infra/asterisk/config:/opt/lucy-asterisk/config:ro
+      - ./infra/asterisk/scripts:/opt/lucy-asterisk/scripts:ro
+      - ./infra/asterisk/fixtures/booking_caller_8k.wav:/var/lib/asterisk/sounds/lucy/booking_caller_8k.wav:ro
+    tmpfs:
+      - /etc/asterisk
+    healthcheck:
+      test: ["CMD", "/opt/lucy-asterisk/scripts/healthcheck.sh"]
+      interval: ${LUCY_TELEPHONY_HEALTH_INTERVAL:-2s}
+      timeout: ${LUCY_TELEPHONY_HEALTH_TIMEOUT:-2s}
+      retries: ${LUCY_TELEPHONY_HEALTH_RETRIES:-15}
+      start_period: ${LUCY_TELEPHONY_HEALTH_START_PERIOD:-2s}
+
+  telephony-caller:
+    image: andrius/asterisk:22@sha256:cc5fce715ec241c588992fbc5372af3a1ae673c6fe48903a49d069223aab68da
+    profiles: ["telephony-lab"]
+    environment:
+      LUCY_TELEPHONY_ARI_HOST: ${LUCY_TELEPHONY_ARI_HOST:-asterisk}
+      LUCY_TELEPHONY_ARI_PORT: ${LUCY_TELEPHONY_ARI_PORT:-8088}
+      LUCY_TELEPHONY_ARI_USER: ${LUCY_TELEPHONY_ARI_USER:-lucy-lab}
+      LUCY_TELEPHONY_ARI_PASSWORD: ${LUCY_TELEPHONY_ARI_PASSWORD:-lucy-lab-only}
+      LUCY_TELEPHONY_ARI_REQUEST_TIMEOUT_SECONDS: ${LUCY_TELEPHONY_ARI_REQUEST_TIMEOUT_SECONDS:-2}
+      LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS: ${LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS:-15}
+      LUCY_TELEPHONY_CALL_POLL_INTERVAL_SECONDS: ${LUCY_TELEPHONY_CALL_POLL_INTERVAL_SECONDS:-0.1}
+    entrypoint:
+      - python3
+      - /opt/lucy-asterisk/scripts/originate_call.py
+    volumes:
+      - ./infra/asterisk/scripts:/opt/lucy-asterisk/scripts:ro
+    depends_on:
+      asterisk:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:

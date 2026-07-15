@@ -1,0 +1,4 @@
+[general]
+rtpstart = $LUCY_TELEPHONY_RTP_PORT_START
+rtpend = $LUCY_TELEPHONY_RTP_PORT_END
+strictrtp = yes

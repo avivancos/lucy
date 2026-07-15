@@ -1,0 +1,23 @@
+[general]
+static = yes
+writeprotect = yes
+clearglobalvars = no
+
+[lucy-lab]
+exten = lab-check,1,Answer()
+ same = n,Set(GLOBAL(LUCY_LAB_RESULT)=started)
+ same = n,Playback(lucy/booking_caller_8k)
+ same = n,GotoIf($$["$${PLAYBACKSTATUS}" = "SUCCESS"]?playback-complete)
+ same = n,Set(GLOBAL(LUCY_LAB_RESULT)=playback-failed)
+ same = n,Hangup()
+ same = n(playback-complete),Set(GLOBAL(LUCY_LAB_RESULT)=completed)
+ same = n,Hangup()
+
+exten = observe,1,NoOp(Lucy lab observer channel)
+ same = n,Wait($LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS)
+ same = n,Hangup()
+
+exten = lucy-audiosocket,1,Answer()
+ same = n,Set(LUCY_CALL_ID=$${UUID()})
+ same = n,AudioSocket($${LUCY_CALL_ID},$LUCY_TELEPHONY_AUDIO_SOCKET_HOST:$LUCY_TELEPHONY_AUDIO_SOCKET_PORT)
+ same = n,Hangup()

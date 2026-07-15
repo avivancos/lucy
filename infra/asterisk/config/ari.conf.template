@@ -1,0 +1,8 @@
+[general]
+enabled = yes
+pretty = no
+
+[$LUCY_TELEPHONY_ARI_USER]
+type = user
+read_only = no
+password = $LUCY_TELEPHONY_ARI_PASSWORD

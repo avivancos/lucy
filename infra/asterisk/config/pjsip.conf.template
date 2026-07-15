@@ -1,0 +1,27 @@
+[transport-udp]
+type = transport
+protocol = udp
+bind = 0.0.0.0:$LUCY_TELEPHONY_PJSIP_PORT
+
+[lucy-lab-auth]
+type = auth
+auth_type = userpass
+username = $LUCY_TELEPHONY_PJSIP_USER
+password = $LUCY_TELEPHONY_PJSIP_PASSWORD
+
+[lucy-lab-aor]
+type = aor
+max_contacts = 1
+remove_existing = yes
+
+[lucy-lab]
+type = endpoint
+transport = transport-udp
+context = lucy-lab
+disallow = all
+allow = ulaw
+allow = alaw
+allow = slin16
+auth = lucy-lab-auth
+aors = lucy-lab-aor
+direct_media = no
