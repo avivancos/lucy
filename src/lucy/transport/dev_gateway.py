@@ -19,6 +19,7 @@ import logging
 import re
 import struct
 import wave
+from dataclasses import dataclass
 from typing import AsyncIterator, Callable, FrozenSet, Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -26,6 +27,7 @@ import httpx
 
 from lucy.clock import Clock, MonotonicClock
 from lucy.evals import SyntheticCallScenario
+from lucy.limits import MAX_CONTROL_DURATION_MS
 from lucy.recording import RecordingUploadTarget
 from lucy.settings import LatencyBudgets
 from lucy.transport.schema import (
@@ -62,6 +64,29 @@ SIMULATOR_RECORDING_CONTAINER = "wav"
 _UPLOAD_URL_IN_LOG = re.compile(r"https?://[^\s\"'<>]+")
 
 
+@dataclass(frozen=True)
+class SimulatedSpeakerActivity:
+    """Measured media-plane speech intervals for one simulator turn."""
+
+    caller_talk_ms: int
+    agent_talk_ms: int
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("caller_talk_ms", self.caller_talk_ms),
+            ("agent_talk_ms", self.agent_talk_ms),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= MAX_CONTROL_DURATION_MS
+            ):
+                raise ValueError(
+                    f"{field_name} must be a strict integer in "
+                    f"0..{MAX_CONTROL_DURATION_MS}; got {type(value).__name__}"
+                )
+
+
 class _SignedUploadLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -92,6 +117,7 @@ class LocalGatewaySimulator:
         vad_interrupt_turns: Iterable[int] = (),
         dtmf_steps: Iterable[str] = (),
         amd_steps: Iterable[AmdResult] = (),
+        speaker_activity: Iterable[SimulatedSpeakerActivity] = (),
         recording_upload_resolver: Optional[
             Callable[[str], RecordingUploadTarget]
         ] = None,
@@ -108,6 +134,18 @@ class LocalGatewaySimulator:
         self.vad_interrupt_turns: FrozenSet[int] = frozenset(vad_interrupt_turns)
         self.dtmf_steps = tuple(dtmf_steps)
         self.amd_steps = tuple(amd_steps)
+        self.speaker_activity = tuple(speaker_activity)
+        caller_turn_count = sum(
+            turn.speaker == "caller" for turn in self.scenario.turns
+        )
+        if self.speaker_activity and len(self.speaker_activity) != caller_turn_count:
+            raise ValueError(
+                "speaker activity must contain one profile per caller turn"
+            )
+        if self.speaker_activity and (self.barge_in_turns or self.vad_interrupt_turns):
+            raise ValueError(
+                "explicit speaker activity cannot be combined with interruptions"
+            )
         self.recording_upload_resolver = recording_upload_resolver
         self.recording_upload_timeout_seconds = recording_upload_timeout_seconds
         self._inbound: "asyncio.Queue[Tuple[Envelope, object]]" = asyncio.Queue()
@@ -286,7 +324,12 @@ class LocalGatewaySimulator:
         caller_turns = [t for t in self.scenario.turns if t.speaker == "caller"]
         for index, turn in enumerate(caller_turns):
             turn_id = "turn_%d" % index
-            async for event in self._caller_turn(turn_id, turn.text):
+            activity = self.speaker_activity[index] if self.speaker_activity else None
+            async for event in self._caller_turn(
+                turn_id,
+                turn.text,
+                talk_ms=activity.caller_talk_ms if activity is not None else None,
+            ):
                 yield event
                 async for recording_event in self._drain_recording_events():
                     yield recording_event
@@ -313,7 +356,9 @@ class LocalGatewaySimulator:
                     return
                 continue
             async for event in self._agent_response(
-                turn_id, interrupt=index in self.barge_in_turns
+                turn_id,
+                interrupt=index in self.barge_in_turns,
+                talk_ms=activity.agent_talk_ms if activity is not None else None,
             ):
                 yield event
                 async for recording_event in self._drain_recording_events():
@@ -334,7 +379,7 @@ class LocalGatewaySimulator:
             yield await self._recording_events.get()
 
     async def _caller_turn(
-        self, turn_id: str, text: str
+        self, turn_id: str, text: str, *, talk_ms: Optional[int]
     ) -> AsyncIterator[ControlEvent]:
         words = text.split()
         speech_started_ms = self._ts_ms
@@ -346,7 +391,10 @@ class LocalGatewaySimulator:
         accumulated = ""
         for position, word in enumerate(words):
             accumulated = (accumulated + " " + word).strip()
-            self._ts_ms += self.budgets.gateway_pacing_ms
+            if talk_ms is None:
+                self._ts_ms += self.budgets.gateway_pacing_ms
+            else:
+                self._ts_ms = speech_started_ms + talk_ms * (position + 1) // len(words)
             stability = round((position + 1) / len(words), 6)
             yield self._emit(
                 "stt.partial",
@@ -355,6 +403,8 @@ class LocalGatewaySimulator:
                 ),
                 turn_id=turn_id,
             )
+        if talk_ms is not None:
+            self._ts_ms = speech_started_ms + talk_ms
         yield self._emit(
             "vad.speech_end",
             VadSpeechEnd(
@@ -402,7 +452,7 @@ class LocalGatewaySimulator:
         )
 
     async def _agent_response(
-        self, turn_id: str, *, interrupt: bool
+        self, turn_id: str, *, interrupt: bool, talk_ms: Optional[int]
     ) -> AsyncIterator[ControlEvent]:
         # Collect every clause of the turn (the session's stream-end barrier
         # bounds the wait, so this resolves without deadlock).
@@ -419,6 +469,7 @@ class LocalGatewaySimulator:
 
         # The simulator models a streamed response as one continuous playback.
         yield self._playback(turn_id, utterances[0].utterance_id, "started", 0)
+        playback_started_ms = self._ts_ms
 
         if interrupt:
             # Barge-in cuts the LAST clause mid-utterance: earlier clauses were
@@ -443,6 +494,32 @@ class LocalGatewaySimulator:
             )
             async for event in self._flush_after_cancel(turn_id, last, heard):
                 yield event
+            return
+
+        if talk_ms is not None:
+            event_count = len(utterances) + 1
+            for position, utterance in enumerate(utterances, start=1):
+                self._ts_ms = playback_started_ms + talk_ms * position // event_count
+                yield self._emit(
+                    "tts.playback",
+                    TtsPlayback(
+                        utterance_id=utterance.utterance_id,
+                        state="mark",
+                        mark_chars=len(utterance.text),
+                    ),
+                    turn_id=turn_id,
+                )
+            last = utterances[-1]
+            self._ts_ms = playback_started_ms + talk_ms
+            yield self._emit(
+                "tts.playback",
+                TtsPlayback(
+                    utterance_id=last.utterance_id,
+                    state="finished",
+                    mark_chars=len(last.text),
+                ),
+                turn_id=turn_id,
+            )
             return
 
         # Clean playback: a mark per clause, one terminal finished after the

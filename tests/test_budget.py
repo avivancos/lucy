@@ -210,7 +210,7 @@ async def test_hard_call_budget_emits_session_end_and_stops_later_turns():
         ],
         expected_outcome="budget stop",
     )
-    gateway = LocalGatewaySimulator(scenario, clock)
+    gateway = LocalGatewaySimulator(scenario, clock, session_id="session-budget")
     exporter = InMemoryTraceExporter()
     tracer = Tracer(exporters=[exporter])
 
@@ -257,6 +257,7 @@ async def test_agent_usd_hard_limit_ends_voice_session():
             expected_outcome="budget stop",
         ),
         clock,
+        session_id="agent-budget",
     )
 
     async def responder(text: str) -> str:
@@ -310,6 +311,7 @@ async def test_rpm_hard_limit_ends_voice_session_before_second_dispatch():
             expected_outcome="budget stop",
         ),
         clock,
+        session_id="rpm-call",
     )
 
     await VoiceSession("rpm-call", gateway, driver=driver, clock=clock).run()
@@ -359,7 +361,7 @@ async def test_soft_usd_rpm_and_tpm_limits_emit_spans_without_ending_call():
         turns=[SyntheticTurn(speaker="caller", text="Hello")],
         expected_outcome="answered",
     )
-    gateway = LocalGatewaySimulator(scenario, clock)
+    gateway = LocalGatewaySimulator(scenario, clock, session_id="soft-call")
     exporter = InMemoryTraceExporter()
     tracer = Tracer(exporters=[exporter])
 
@@ -973,7 +975,7 @@ async def test_cancelled_voice_session_cancels_prefetch_and_preserves_background
             cancelled.set()
             raise
 
-    session = VoiceSession("owned", transport, responder, clock=clock)
+    session = VoiceSession("cancelled", transport, responder, clock=clock)
     session._prefetch_tasks.add(asyncio.create_task(owned_task(prefetch_cancelled)))
     background_task = asyncio.create_task(owned_task(background_cancelled))
     session._background_tasks.add(background_task)
@@ -1333,7 +1335,7 @@ async def test_tpm_hard_limit_ends_a_voice_session_and_preserves_usage_cost():
         ],
         expected_outcome="budget stop",
     )
-    gateway = LocalGatewaySimulator(scenario, clock)
+    gateway = LocalGatewaySimulator(scenario, clock, session_id="rate-call")
     exporter = InMemoryTraceExporter()
     tracer = Tracer(exporters=[exporter])
 
@@ -1543,6 +1545,7 @@ async def test_unwrapped_usd_governed_driver_requires_usage_report():
             expected_outcome="budget stop",
         ),
         clock,
+        session_id="unwrapped-unmetered",
     )
 
     await VoiceSession(
@@ -1569,7 +1572,7 @@ async def test_non_llm_tts_cost_can_end_voice_session_budget():
         turns=[SyntheticTurn(speaker="caller", text="Hello")],
         expected_outcome="budget stop",
     )
-    gateway = LocalGatewaySimulator(scenario, clock)
+    gateway = LocalGatewaySimulator(scenario, clock, session_id="tts-budget")
 
     async def responder(text: str) -> str:
         del text
@@ -1847,6 +1850,7 @@ async def test_missing_llm_metering_ends_governed_voice_session():
             expected_outcome="budget stop",
         ),
         clock,
+        session_id="unmetered-call",
     )
 
     await VoiceSession(
@@ -1901,6 +1905,7 @@ async def test_missing_llm_metering_ends_usd_only_voice_session():
             expected_outcome="budget stop",
         ),
         clock,
+        session_id="unmetered-usd-call",
     )
 
     await VoiceSession(
@@ -2471,7 +2476,9 @@ async def test_non_cooperative_prefetch_is_detached_and_reported():
             except asyncio.CancelledError:
                 cancel_seen.set()
 
-    session = VoiceSession("detached", transport, responder, clock=clock, tracer=tracer)
+    session = VoiceSession(
+        "cancelled", transport, responder, clock=clock, tracer=tracer
+    )
     stubborn_task = asyncio.create_task(non_cooperative_task())
     session._prefetch_tasks.add(stubborn_task)
     run_task = asyncio.create_task(session.run())

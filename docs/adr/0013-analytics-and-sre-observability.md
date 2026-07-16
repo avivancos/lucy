@@ -19,7 +19,8 @@ wire v1.
 Open:
 
 - The analytics semantic model in `docs/analytics-model-v1.md`.
-- The in-process rollup engine `lucy.analytics` delivered by card 53.
+- The in-process rollup engine `lucy.analytics` delivered by card 103; Decision
+  53 preserves the superseded proposal as historical context only.
 - The runtime-local analytics surface delivered by card 54.
 
 Open (SRE seam):

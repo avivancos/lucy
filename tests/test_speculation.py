@@ -577,7 +577,7 @@ async def test_speculation_shaves_final_to_first_speak_gap():
         token_interval_ms=budgets.llm_first_clause_ms,
     )
     await VoiceSession(
-        "serial",
+        "s",
         serial_gateway,
         None,
         driver=_driver(serial_clock, serial_sim),
@@ -594,7 +594,7 @@ async def test_speculation_shaves_final_to_first_speak_gap():
         token_interval_ms=budgets.llm_first_clause_ms,
     )
     await VoiceSession(
-        "spec",
+        "s",
         spec_gateway,
         None,
         driver=_driver(spec_clock, spec_sim),

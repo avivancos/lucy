@@ -14,7 +14,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
-from lucy.limits import MAX_PRICEBOOK_VERSION_LENGTH, MAX_USAGE_UNITS
+from lucy.limits import (
+    MAX_CONTROL_DURATION_MS,
+    MAX_PRICEBOOK_VERSION_LENGTH,
+    MAX_USAGE_UNITS,
+)
 from lucy.jurisdiction import IsoCountryCode
 from lucy.metrics import CostBreakdown, CostComponent, LatencyWaterfall
 from lucy.privacy import contains_sensitive_text
@@ -33,6 +37,7 @@ NonEmptyString = Annotated[str, Field(min_length=1)]
 NonNegativeFiniteFloat = Annotated[
     float, Field(ge=0.0, le=MAX_USAGE_UNITS, allow_inf_nan=False)
 ]
+TalkDurationMs = Annotated[int, Field(strict=True, ge=0, le=MAX_CONTROL_DURATION_MS)]
 CostAttributionKey = Annotated[str, Field(min_length=1, max_length=64)]
 PriceBookVersion = Annotated[
     str, Field(min_length=1, max_length=MAX_PRICEBOOK_VERSION_LENGTH)
@@ -107,6 +112,8 @@ class TurnEvent(TelemetryEventBase):
     latency_waterfall: LatencyWaterfall
     interrupted: bool = False
     timeout_events: List[str] = Field(default_factory=list)
+    caller_talk_ms: TalkDurationMs = 0
+    agent_talk_ms: TalkDurationMs = 0
 
 
 class SpanEvent(TelemetryEventBase):

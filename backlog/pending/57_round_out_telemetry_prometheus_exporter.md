@@ -3,7 +3,7 @@
 **Sprint:** S9 - Analytics & SRE observability
 **Epic:** Observability
 **Estimated effort:** ~5 h
-**Depends on:** 24, 25, 53
+**Depends on:** 24, 25, 103
 **State:** pending
 
 ## Goal
@@ -11,7 +11,7 @@
 Bridge the two observability planes and close the last call-telemetry gaps: a
 `PrometheusExporter` that implements card 24's `TraceExporter` protocol so business
 telemetry events also drive the SRE metric registry, plus the instrumentation
-completeness card 53's rollups need (a full `LatencyWaterfall` on every turn,
+completeness card 103's rollups need (a full `LatencyWaterfall` on every turn,
 deadline-miss and barge-in signals, and the export-drop counter surfaced as an
 event). After this card, one event stream feeds the local viewer, the analytics
 rollups, and the Prometheus scrape with no divergence.
@@ -33,7 +33,7 @@ Read, in this order, before writing anything:
 - `src/lucy/runtime.py` (instrumented in card 25) - where turn spans, deadline
   misses, and fallbacks originate; this card asserts each turn emits a complete
   waterfall and a deadline/barge-in signal when applicable.
-- `src/lucy/analytics/rollup.py` (card 53) - the exact event fields the rollup
+- `src/lucy/analytics.py` (card 103) - the exact event fields the rollup
   consumes; the conformance test below asserts a recorded quickstart trace carries
   them all.
 - `tests/test_observability.py` - house style for telemetry tests; recorded events
@@ -82,7 +82,7 @@ Read, in this order, before writing anything:
   (`examples/quickstart_voice_agent.py`) to a recorded trace and assert each `turn`
   event has all six waterfall segments.
 - `test_quickstart_trace_satisfies_rollup_required_fields` - feed that trace to
-  card 53's `RollupAccumulator` and assert `dropped_events == 0` and a non-empty
+  card 103's `RollupAccumulator` and assert `dropped_events == 0` and a non-empty
   `RunRollup` (the rollup's required fields are all present in real traces).
 - `test_exporter_drop_emits_business_event` - drive the card 24 queue to drop and
   assert exactly one `exporter_drop` business event is recorded.
@@ -115,7 +115,7 @@ Read, in this order, before writing anything:
 - [ ] **C3 - Drop event + rollup conformance.** Tests first:
   `test_exporter_drop_emits_business_event` and
   `test_quickstart_trace_satisfies_rollup_required_fields` (feed the real quickstart
-  trace to card 53's accumulator; `dropped_events == 0`, non-empty `RunRollup`).
+  trace to card 103's accumulator; `dropped_events == 0`, non-empty `RunRollup`).
   Implement the rate-limited `exporter_drop` business event. Files:
   `src/lucy/observe/__init__.py`, `src/lucy/runtime.py`,
   `tests/test_observe_prometheus.py`. Verify:

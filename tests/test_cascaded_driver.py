@@ -14,10 +14,10 @@ from lucy.llm import (
 )
 from lucy.providers import default_model_registry
 from lucy.pricing import PriceBook
-from lucy.session import VoiceSession
+from lucy.session import SessionControlError, VoiceSession
 from lucy.settings import LatencyBudgets, LlmPricing
 from lucy.transport.dev_gateway import LocalGatewaySimulator
-from lucy.transport.schema import TtsSpeak
+from lucy.transport.schema import BargeIn, TtsPlayback, TtsSpeak
 
 
 async def _drain(clock: ManualClock, task, step_ms: float, max_steps: int = 80):
@@ -333,12 +333,65 @@ async def test_driver_turn_barge_in_truncates_multi_clause_via_planner():
         )
     )
     await _drain(clock, task, budgets.llm_first_clause_ms / 10, max_steps=400)
-    record = task.result().turn_records[0]
+    result = task.result()
+    record = result.turn_records[0]
 
     assert record.interrupted is True
     # First clause fully heard; the second cut at its playback mark
     # ("Anything else?" is 14 chars -> heard = 7 -> "Anythin").
     assert record.assistant_text == "Happy to help. Anythin"
+    playback_started = next(
+        event.envelope.ts_ms
+        for event in result.events
+        if isinstance(event.payload, TtsPlayback) and event.payload.state == "started"
+    )
+    barge_in = next(
+        event.envelope.ts_ms
+        for event in result.events
+        if isinstance(event.payload, BargeIn)
+    )
+    assert record.agent_talk_ms == barge_in - playback_started
+
+
+class _InactiveClauseFlushGateway(LocalGatewaySimulator):
+    async def _flush_after_cancel(self, turn_id, utterance, heard):
+        planned = [
+            event.payload for event in self.sent if isinstance(event.payload, TtsSpeak)
+        ]
+        assert len(planned) > 1
+        yield self._playback(
+            turn_id,
+            planned[0].utterance_id,
+            "flushed",
+            len(planned[0].text),
+        )
+        async for event in super()._flush_after_cancel(turn_id, utterance, heard):
+            yield event
+
+
+async def test_late_flush_rejects_known_but_inactive_clause():
+    budgets = LatencyBudgets()
+    clock = ManualClock()
+    simulator = LocalLlmSimulator(
+        [
+            ScriptedLlmTurn(
+                tokens=["First clause. ", "Second clause."],
+                usage=UsageReport(2, 2),
+            )
+        ],
+        clock,
+        token_interval_ms=0,
+    )
+    driver = _driver(clock, simulator, budgets, min_flush_chars=1)
+    gateway = _InactiveClauseFlushGateway(
+        _one_turn_scenario(),
+        clock,
+        session_id="inactive-flush",
+        barge_in_turns={0},
+    )
+
+    with pytest.raises(SessionControlError):
+        await VoiceSession("inactive-flush", gateway, driver=driver, clock=clock).run()
 
 
 async def test_billable_minutes_track_clock_duration():

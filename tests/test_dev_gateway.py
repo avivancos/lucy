@@ -1,6 +1,11 @@
+import pytest
+
 from lucy.clock import ManualClock
 from lucy.evals import booking_happy_path
-from lucy.transport.dev_gateway import LocalGatewaySimulator
+from lucy.transport.dev_gateway import (
+    LocalGatewaySimulator,
+    SimulatedSpeakerActivity,
+)
 from lucy.transport.schema import (
     Envelope,
     SessionEnded,
@@ -155,3 +160,79 @@ async def test_multi_clause_turn_plays_every_clause_with_one_terminal_finished()
     ]
     terminal = playback[-1]
     assert terminal.utterance_id == "u2" and terminal.mark_chars == len(clauses[2])
+
+
+async def test_explicit_speaker_activity_controls_vad_and_playback_intervals():
+    activity = (
+        SimulatedSpeakerActivity(caller_talk_ms=701, agent_talk_ms=127),
+        SimulatedSpeakerActivity(caller_talk_ms=103, agent_talk_ms=911),
+    )
+    events = await _drive(
+        LocalGatewaySimulator(
+            booking_happy_path(),
+            ManualClock(),
+            speaker_activity=activity,
+        )
+    )
+
+    for index, expected in enumerate(activity):
+        turn_events = [
+            event for event in events if event.envelope.turn_id == f"turn_{index}"
+        ]
+        vad_start = next(
+            event.envelope.ts_ms
+            for event in turn_events
+            if event.envelope.type == "vad.speech_start"
+        )
+        vad_end = next(
+            event.envelope.ts_ms
+            for event in turn_events
+            if event.envelope.type == "vad.speech_end"
+        )
+        playback_start = next(
+            event.envelope.ts_ms
+            for event in turn_events
+            if isinstance(event.payload, TtsPlayback)
+            and event.payload.state == "started"
+        )
+        playback_end = next(
+            event.envelope.ts_ms
+            for event in turn_events
+            if isinstance(event.payload, TtsPlayback)
+            and event.payload.state == "finished"
+        )
+        assert vad_end - vad_start == expected.caller_talk_ms
+        assert playback_end - playback_start == expected.agent_talk_ms
+
+
+def test_speaker_activity_profile_count_must_match_caller_turns():
+    profiles = (SimulatedSpeakerActivity(caller_talk_ms=1, agent_talk_ms=1),)
+    with pytest.raises(ValueError, match="one profile per caller turn"):
+        LocalGatewaySimulator(
+            booking_happy_path(), ManualClock(), speaker_activity=profiles
+        )
+
+
+@pytest.mark.parametrize("value", [True, -1, 1.5, "1"])
+def test_speaker_activity_rejects_invalid_durations(value):
+    with pytest.raises(ValueError, match="caller_talk_ms must be a strict integer"):
+        SimulatedSpeakerActivity(caller_talk_ms=value, agent_talk_ms=1)
+
+
+def test_speaker_activity_error_names_invalid_agent_field():
+    with pytest.raises(ValueError, match="agent_talk_ms must be a strict integer"):
+        SimulatedSpeakerActivity(caller_talk_ms=1, agent_talk_ms=1.5)
+
+
+def test_explicit_activity_rejects_interrupt_profiles():
+    activity = (
+        SimulatedSpeakerActivity(caller_talk_ms=1, agent_talk_ms=1),
+        SimulatedSpeakerActivity(caller_talk_ms=1, agent_talk_ms=1),
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        LocalGatewaySimulator(
+            booking_happy_path(),
+            ManualClock(),
+            speaker_activity=activity,
+            barge_in_turns={0},
+        )

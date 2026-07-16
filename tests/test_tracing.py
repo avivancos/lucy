@@ -41,7 +41,7 @@ def test_turn_span_tree_parents_nodes_under_turn_under_session():
 async def test_one_call_emits_session_turn_node_spans_with_correct_parents():
     exporter = InMemoryTraceExporter()
     tracer = Tracer(exporters=[exporter], clock=lambda: 1000, id_factory=_ids())
-    gw = LocalGatewaySimulator(booking_happy_path(), ManualClock())
+    gw = LocalGatewaySimulator(booking_happy_path(), ManualClock(), session_id="s1")
     session = VoiceSession("s1", gw, _canned, tracer=tracer, clock=ManualClock())
 
     await session.run()

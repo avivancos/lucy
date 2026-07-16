@@ -760,7 +760,9 @@ async def test_responder_session_does_not_invent_provider_attribution():
 
     await VoiceSession(
         "local-responder-attribution",
-        LocalGatewaySimulator(scenario, clock),
+        LocalGatewaySimulator(
+            scenario, clock, session_id="local-responder-attribution"
+        ),
         responder=responder,
         clock=clock,
         tracer=tracer,
@@ -1004,7 +1006,7 @@ async def test_graph_driver_propagates_rag_and_mcp_cost_facts():
 
     await VoiceSession(
         "graph-priced",
-        LocalGatewaySimulator(scenario, clock),
+        LocalGatewaySimulator(scenario, clock, session_id="graph-priced"),
         driver=driver,
         clock=clock,
         tracer=tracer,
@@ -1036,8 +1038,9 @@ class _BlockingRagIndex:
 
 
 class _GraphRagInterruptGateway:
-    def __init__(self, rag_started: asyncio.Event) -> None:
+    def __init__(self, rag_started: asyncio.Event, session_id: str) -> None:
         self.rag_started = rag_started
+        self.session_id = session_id
         self.sent: list[ControlEvent] = []
 
     async def send(self, envelope, payload) -> None:
@@ -1045,13 +1048,15 @@ class _GraphRagInterruptGateway:
 
     async def events(self):
         yield ControlEvent(
-            Envelope(type="session.started", session_id="graph-rag", seq=0, ts_ms=0),
+            Envelope(
+                type="session.started", session_id=self.session_id, seq=0, ts_ms=0
+            ),
             SessionStarted(transport="test", caller="opaque", codecs=["pcmu"]),
         )
         yield ControlEvent(
             Envelope(
                 type="stt.final",
-                session_id="graph-rag",
+                session_id=self.session_id,
                 turn_id="turn-1",
                 seq=1,
                 ts_ms=10,
@@ -1062,7 +1067,7 @@ class _GraphRagInterruptGateway:
         yield ControlEvent(
             Envelope(
                 type="vad.speech_start",
-                session_id="graph-rag",
+                session_id=self.session_id,
                 turn_id="interrupt",
                 seq=2,
                 ts_ms=20,
@@ -1071,7 +1076,7 @@ class _GraphRagInterruptGateway:
         )
         assert any(isinstance(event.payload, TtsStreamEnd) for event in self.sent)
         yield ControlEvent(
-            Envelope(type="session.ended", session_id="graph-rag", seq=3, ts_ms=30),
+            Envelope(type="session.ended", session_id=self.session_id, seq=3, ts_ms=30),
             SessionEnded(reason="done"),
         )
 
@@ -1103,7 +1108,7 @@ async def test_cancelled_graph_rag_dispatch_remains_billable():
 
     await VoiceSession(
         "cancelled-graph-rag",
-        _GraphRagInterruptGateway(rag_index.started),
+        _GraphRagInterruptGateway(rag_index.started, "cancelled-graph-rag"),
         driver=driver,
         clock=clock,
         tracer=tracer,
@@ -1319,8 +1324,9 @@ class _OpenVadFloodGateway:
 
 
 class _PerUtterancePlaybackGateway(LocalGatewaySimulator):
-    async def _agent_response(self, turn_id: str, *, interrupt: bool):
+    async def _agent_response(self, turn_id: str, *, interrupt: bool, talk_ms=None):
         assert not interrupt
+        assert talk_ms is None
         utterances = await self._collect_turn_directives(turn_id)
         for utterance in utterances:
             yield self._playback(turn_id, utterance.utterance_id, "started", 0)
@@ -1340,7 +1346,7 @@ async def _run_vad_accounting(gateway_type):
         turns=[SyntheticTurn(speaker="caller", text="hello there")],
         expected_outcome="answered",
     )
-    gateway = gateway_type(scenario, clock)
+    gateway = gateway_type(scenario, clock, session_id="vad-priced-session")
     exporter = InMemoryTraceExporter()
     tracer = Tracer(exporters=[exporter])
 
@@ -1544,7 +1550,12 @@ async def test_tts_duration_accumulates_each_playback_interval():
 
     await VoiceSession(
         "per-utterance-session",
-        _PerUtterancePlaybackGateway(scenario, clock, budgets=budgets),
+        _PerUtterancePlaybackGateway(
+            scenario,
+            clock,
+            session_id="per-utterance-session",
+            budgets=budgets,
+        ),
         driver=driver,
         clock=clock,
         tracer=tracer,
@@ -1576,7 +1587,7 @@ async def test_voice_session_uses_process_global_tracer_for_costs():
     try:
         await VoiceSession(
             "global-tracer-session",
-            LocalGatewaySimulator(scenario, clock),
+            LocalGatewaySimulator(scenario, clock, session_id="global-tracer-session"),
             responder,
             clock=clock,
             pricebook=_pricebook(),

@@ -164,7 +164,7 @@ async def test_live_cascaded_session_passes_prefetched_rag_context_to_llm_reques
         turns=[SyntheticTurn(speaker="caller", text="Tuesday morning")],
         expected_outcome="completed",
     )
-    gateway = LocalGatewaySimulator(scenario, clock)
+    gateway = LocalGatewaySimulator(scenario, clock, session_id="session-live")
     session = VoiceSession(
         "session-live",
         gateway,

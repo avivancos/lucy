@@ -3,16 +3,16 @@
 **Sprint:** S9 - Analytics & SRE observability
 **Epic:** Analytics
 **Estimated effort:** ~4 h
-**Depends on:** 53, 31
+**Depends on:** 103, 31
 **State:** pending
 
 ## Goal
 
-Make the rollup snapshots from card 53 visible without any platform: a JSON API on
+Make the rollup snapshots from card 103 visible without any platform: a JSON API on
 the serve app (`GET /analytics`, `GET /analytics/sessions/{id}`) and an analytics
 panel in the local dev trace viewer. Everything recomputes per request from the
 in-process accumulator or the trace file and persists nothing, holding the ADR 0010
-scope cap that card 53 established.
+scope cap that card 103 established.
 
 ## Context primer
 
@@ -24,7 +24,7 @@ Read, in this order, before writing anything:
 - `docs/adr/0010-open-core-split.md` - the boundary: a runtime-local read of the
   current process's rollup is open; stored history, search, and cross-run views are
   closed. This surface computes on the fly and stores nothing.
-- `src/lucy/analytics/rollup.py` (card 53) - `RollupAccumulator`, `RunRollup`,
+- `src/lucy/analytics.py` (card 103) - `RollupAccumulator`, `RunRollup`,
   `SessionRollup`, and `RunRollup.to_dict()` (the analytics-model-v1 JSON shape the
   API returns verbatim).
 - `src/lucy/serve/app.py` (card 23) - the `create_app` FastAPI factory and how
@@ -118,7 +118,7 @@ it (no storage, no auth, no cross-run comparisons, no audio).
   JSON or a stubbed accumulator.
 - Do not hardcode routes, host, or port at call sites; reuse the serve app's typed
   settings and the existing `DevViewerSettings`. No magic strings for the schema
-  version - reuse card 53's named constant.
+  version - reuse card 103's named constant.
 - Do not add storage, history, search, pagination over past runs, cross-run
   comparison, or auth to either surface (ADR 0010 scope cap); both recompute and
   persist nothing.
@@ -139,7 +139,7 @@ it (no storage, no auth, no cross-run comparisons, no audio).
 
 ## Failure protocol
 
-If a test fails, card 53's `to_dict()` shape does not match what the route returns,
+If a test fails, card 103's `to_dict()` shape does not match what the route returns,
 or the viewer panel cannot reuse the accumulator cleanly: do NOT check boxes, do
 NOT force tests green. Leave the card in `in_progress/`, document the mismatch under
 "Improvements noted", and report. Partial honest work beats fake completion.

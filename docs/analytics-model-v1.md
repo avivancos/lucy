@@ -9,13 +9,16 @@ field, changing a grain, or changing a formula requires a new major version.
 ## Scope and boundary
 
 This open semantic model defines portable facts, dimensions, measures, formulas,
-and rollup snapshots derived from telemetry wire v1. The in-process
-`lucy.analytics` engine and the closed platform warehouse implement the same
-contract.
+and rollup snapshots derived from telemetry wire v1. Open `lucy.analytics`
+functions and the closed platform warehouse consume this same contract as each
+rollup capability is implemented.
 
 The open model defines no persistence and no cross-run or cross-tenant
-aggregation. Warehouse storage, tenant isolation, cross-run queries, comparisons,
-and hosted BI are closed platform concerns under ADR 0010 and ADR 0013.
+aggregation. `lucy.analytics` currently implements the measured talk-duration
+rollup defined below; the remaining v1 formulas are normative consumer
+contracts, not a claim that a complete in-process rollup engine already ships.
+Warehouse storage, tenant isolation, cross-run queries, comparisons, and hosted
+BI are closed platform concerns under ADR 0010 and ADR 0013.
 
 ## Facts
 
@@ -62,6 +65,12 @@ sum of the seven cost components, not a separately priced component.
 Latency measures reuse `LatencyWaterfall` names: `stt_ms`, `rag_ms`, `llm_ms`,
 `mcp_tools_ms`, `tts_ms`, and `transport_ms`. `total_ms` is their sum per turn.
 
+Speech-activity measures are additive `caller_talk_ms` and `agent_talk_ms`.
+`caller_talk_ms` comes from media-plane VAD speech intervals and
+`agent_talk_ms` comes from media-plane playback intervals. Producers must not
+derive either measure from transcript length, token counts, call duration,
+billable audio minutes, or TTS text length.
+
 Count measures are `turn_count`, `session_count`, `tool_call_count`,
 `tool_error_count`, `barge_in_count`, and `deadline_miss_count`. A tool call is
 an error when `tool_call.error` is non-null. A barge-in is an interrupted turn.
@@ -80,6 +89,7 @@ null when its denominator is zero.
 - `deadline_miss_rate = deadline_miss_count / turn_count`.
 - `barge_in_rate = barge_in_count / turn_count`.
 - `tool_success_rate = 1 - tool_error_count / tool_call_count`.
+- `talk_ratio = agent_talk_ms / (agent_talk_ms + caller_talk_ms)`.
 
 ## Rollup snapshot schema
 
@@ -138,7 +148,9 @@ Worked `RunRollup` example:
     "tool_call_count": 1,
     "tool_error_count": 0,
     "barge_in_count": 0,
-    "deadline_miss_count": 0
+    "deadline_miss_count": 0,
+    "caller_talk_ms": 840,
+    "agent_talk_ms": 1160
   },
   "latency_percentiles": {
     "stt_ms": {"p50": 120.0, "p95": 120.0, "p99": 120.0},
@@ -155,7 +167,8 @@ Worked `RunRollup` example:
     "conversion_rate": 1.0,
     "deadline_miss_rate": 0.0,
     "barge_in_rate": 0.0,
-    "tool_success_rate": 1.0
+    "tool_success_rate": 1.0,
+    "talk_ratio": 0.58
   }
 }
 ```

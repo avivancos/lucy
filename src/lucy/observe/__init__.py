@@ -288,6 +288,8 @@ class Tracer:
         latency_waterfall: LatencyWaterfall,
         interrupted: bool = False,
         timeout_events: Optional[List[str]] = None,
+        caller_talk_ms: int = 0,
+        agent_talk_ms: int = 0,
         tags: Optional[Dict[str, str]] = None,
         emitted_at_ms: Optional[int] = None,
         event_id: Optional[str] = None,
@@ -302,6 +304,8 @@ class Tracer:
                 latency_waterfall=latency_waterfall,
                 interrupted=interrupted,
                 timeout_events=list(timeout_events or []),
+                caller_talk_ms=caller_talk_ms,
+                agent_talk_ms=agent_talk_ms,
                 tags=self._event_tags(tags),
             )
         )

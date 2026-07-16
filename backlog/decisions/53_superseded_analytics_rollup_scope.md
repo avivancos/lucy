@@ -1,12 +1,21 @@
-# 53 - Build the lucy.analytics in-process rollup engine
+# Decision 53 - Superseded analytics rollup scope
 
-**Sprint:** S9 - Analytics & SRE observability
+**Historical sprint:** S9 - Analytics & SRE observability (not executable)
 **Epic:** Analytics
 **Estimated effort:** ~6 h
 **Depends on:** 24, 52
-**State:** pending
+**State:** superseded by Card 103
 
-## Goal
+## Decision
+
+This original implementation card is no longer executable. Card 103 replaces
+its incomplete package layout and owns the complete in-process
+`analytics-model/v1` engine after Cards 98 and 99 established provider and talk
+attribution. Cards 54 and 57 depend on Card 103.
+
+The remaining text is retained as historical context only.
+
+## Original goal
 
 Turn the raw telemetry event stream into the analytical snapshots defined by
 analytics-model-v1, entirely in-process and without storage. A `RollupAccumulator`

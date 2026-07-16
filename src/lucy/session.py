@@ -83,6 +83,7 @@ from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
     BargeIn,
+    ControlEvent,
     DownstreamDirective,
     Envelope,
     RecordingFailed,
@@ -106,6 +107,10 @@ if TYPE_CHECKING:
     from lucy.recording import RecordingCoordinator
 
 Responder = Callable[[str], Awaitable[str]]
+
+
+class SessionControlError(ValueError):
+    """A control event does not belong to the active session or turn."""
 
 
 def heard_assistant_text(
@@ -222,6 +227,8 @@ class TurnRecord:
     waterfall: LatencyWaterfall
     cost: Optional[CostBreakdown] = None
     rag_cache_hit: bool = False
+    caller_talk_ms: int = 0
+    agent_talk_ms: int = 0
 
 
 @dataclass
@@ -257,6 +264,9 @@ class _ActiveTurn:
     utterance_texts: List[tuple[str, str]] = field(default_factory=list)
     playbacks: List[TtsPlayback] = field(default_factory=list)
     playback_started_ms: dict[str, int] = field(default_factory=dict)
+    playback_resume_ms: Optional[int] = None
+    caller_talk_ms: int = 0
+    agent_talk_ms: int = 0
     record: Optional[TurnRecord] = None
 
 
@@ -379,6 +389,7 @@ class VoiceSession:
         self._vad_started_at: dict[str, int] = {}
         self._pending_stt_speech_ms: dict[str, int] = {}
         self._stt_billed_turns: set[str] = set()
+        self._interrupted_turns: dict[str, frozenset[str]] = {}
         self.state = TurnState.IDLE
         self.transitions: List[TurnState] = [TurnState.IDLE]
         self.spans: List[Span] = []
@@ -533,6 +544,8 @@ class VoiceSession:
         self._event_stream = events
         async for event in events:
             payload = event.payload
+            if event.envelope.session_id != self.session_id:
+                raise SessionControlError("control event crossed session identity")
             if self._budget_ended and (
                 active is None
                 or not isinstance(payload, TtsPlayback)
@@ -540,6 +553,20 @@ class VoiceSession:
             ):
                 break
             event_turn_id = event.envelope.turn_id or "turn"
+            if isinstance(payload, TtsPlayback):
+                if active is None:
+                    interrupted_utterances = self._interrupted_turns.get(event_turn_id)
+                    if (
+                        payload.state == "flushed"
+                        and interrupted_utterances is not None
+                        and payload.utterance_id in interrupted_utterances
+                    ):
+                        self._interrupted_turns.pop(event_turn_id)
+                        continue
+                    raise SessionControlError(
+                        "playback event has no active turn lifecycle"
+                    )
+                self._validate_playback_event(active, event)
             last_ts = event.envelope.ts_ms
             if not started:
                 tree.start_session(event.envelope.ts_ms)
@@ -669,6 +696,7 @@ class VoiceSession:
                     active.stt_ms = payload.stt_ms
                     active.stt_final_ms = event.envelope.ts_ms
                     active.started_ms = max(0, event.envelope.ts_ms - payload.stt_ms)
+                    active.caller_talk_ms = speech_ms or 0
                     if speculative_context is not None:
                         speculative_context.promoted.set()
                         while speculative_context.buffered_directives:
@@ -694,6 +722,7 @@ class VoiceSession:
                     stt_final_ms=ts,
                     started_ms=max(0, ts - payload.stt_ms),
                     clock_start=self.clock.monotonic(),
+                    caller_talk_ms=speech_ms or 0,
                 )
                 self._set_state(TurnState.THINKING)
                 if self.driver is not None:
@@ -722,12 +751,22 @@ class VoiceSession:
                 if active.planner is not None:
                     active.planner.record_playback(payload)
                 if payload.state == "started":
+                    active.playback_resume_ms = None
                     active.playback_started_ms.setdefault(
                         payload.utterance_id, event.envelope.ts_ms
                     )
                     if not active.speak_started_ms:
                         active.speak_started_ms = event.envelope.ts_ms
                     self._set_state(TurnState.SPEAKING)
+                elif (
+                    payload.state == "mark"
+                    and not active.playback_started_ms
+                    and active.playback_resume_ms is not None
+                ):
+                    active.playback_started_ms[payload.utterance_id] = (
+                        active.playback_resume_ms
+                    )
+                    active.playback_resume_ms = None
                 elif payload.state in ("finished", "flushed"):
                     self._record_playback_duration(
                         active, payload, event.envelope.ts_ms
@@ -747,6 +786,8 @@ class VoiceSession:
                         active = None
 
             elif isinstance(payload, BargeIn) and active is not None:
+                if event.envelope.turn_id != active.turn_id:
+                    raise SessionControlError("barge-in event crossed turn identity")
                 if self.state in (TurnState.THINKING, TurnState.SPEAKING):
                     await self._interrupt(active, event.envelope.ts_ms, tree, records)
                     active = None
@@ -1012,6 +1053,9 @@ class VoiceSession:
         records: List[TurnRecord],
     ) -> None:
         turn.interrupted = True
+        if len(self._interrupted_turns) >= MAX_SESSION_ACCOUNTING_TURNS:
+            raise SessionControlError("interrupted turn tracking exceeded its bound")
+        self._interrupted_turns[turn.turn_id] = frozenset(turn.playback_started_ms)
         turn.ended_ms = ts_ms
         if self.state == TurnState.SPEAKING:
             await self._send_directive(
@@ -1029,12 +1073,11 @@ class VoiceSession:
         # during THINKING leaves speak_started_ms at 0, so guard the subtraction
         # (an absolute timestamp here would corrupt the waterfall).
         for started_ms in turn.playback_started_ms.values():
-            turn.tts_ms = self._checked_usage_add(
-                turn.tts_ms,
-                max(0, ts_ms - started_ms),
-                MAX_CONTROL_DURATION_MS,
-            )
+            self._add_agent_playback_duration(turn, ts_ms - started_ms)
+        if not turn.playback_started_ms and turn.playback_resume_ms is not None:
+            self._add_agent_playback_duration(turn, ts_ms - turn.playback_resume_ms)
         turn.playback_started_ms.clear()
+        turn.playback_resume_ms = None
         await self._cancel_task(turn)
         if self._background_capacity_exceeded and not self._budget_ended:
             await self._end_for_budget(turn.turn_id)
@@ -1049,6 +1092,16 @@ class VoiceSession:
         self, turn: _ActiveTurn, tree: TurnSpanTree, records: List[TurnRecord]
     ) -> None:
         record = self._finalize(turn, tree)
+        if self.tracer.enabled:
+            self.tracer.turn(
+                session_id=self.session_id,
+                turn_id=record.turn_id,
+                turn_index=len(records),
+                latency_waterfall=record.waterfall,
+                interrupted=record.interrupted,
+                caller_talk_ms=record.caller_talk_ms,
+                agent_talk_ms=record.agent_talk_ms,
+            )
         self._account_turn_usage(turn)
         self._mcp_tool_calls = self._checked_usage_add(
             self._mcp_tool_calls, turn.mcp_tool_calls, MAX_USAGE_UNITS
@@ -1271,6 +1324,8 @@ class VoiceSession:
             waterfall=waterfall,
             cost=cost,
             rag_cache_hit=turn.rag_cache_hit,
+            caller_talk_ms=turn.caller_talk_ms,
+            agent_talk_ms=turn.agent_talk_ms,
         )
 
     def _priced_session_usage(
@@ -1473,17 +1528,67 @@ class VoiceSession:
         self, turn: _ActiveTurn, playback: TtsPlayback, ended_ms: int
     ) -> None:
         started_ms = turn.playback_started_ms.pop(playback.utterance_id, None)
-        if started_ms is None and turn.playback_started_ms:
-            # The local gateway emits one start marker for the streamed response.
-            _, started_ms = turn.playback_started_ms.popitem()
+        if started_ms is None and self._is_continuous_terminal(turn, playback):
+            first_utterance_id = turn.utterance_texts[0][0]
+            started_ms = turn.playback_started_ms.pop(first_utterance_id)
         if started_ms is None:
             if playback.state != "flushed":
                 self._drop_pricing_fact()
             return
+        self._add_agent_playback_duration(turn, ended_ms - started_ms)
+        if (
+            playback.state == "finished"
+            and turn.planner is not None
+            and not turn.planner.is_last(playback.utterance_id)
+        ):
+            turn.playback_resume_ms = ended_ms
+        else:
+            turn.playback_resume_ms = None
+
+    def _validate_playback_event(self, turn: _ActiveTurn, event: ControlEvent) -> None:
+        playback = event.payload
+        assert isinstance(playback, TtsPlayback)
+        if event.envelope.turn_id != turn.turn_id:
+            raise SessionControlError("playback event crossed turn identity")
+        expected_utterances = {utterance_id for utterance_id, _ in turn.utterance_texts}
+        if playback.utterance_id not in expected_utterances:
+            raise SessionControlError("playback event names an unknown utterance")
+        if playback.state == "started" and turn.playback_started_ms:
+            raise SessionControlError("playback start was replayed or overlapped")
+        if playback.state in ("finished", "flushed"):
+            started_ms = turn.playback_started_ms.get(playback.utterance_id)
+            if started_ms is None and not self._is_continuous_terminal(turn, playback):
+                raise SessionControlError("playback terminal has no matching start")
+            if started_ms is None:
+                started_ms = turn.playback_started_ms[turn.utterance_texts[0][0]]
+            if event.envelope.ts_ms < started_ms:
+                raise SessionControlError("playback timestamps are reversed")
+
+    @staticmethod
+    def _is_continuous_terminal(turn: _ActiveTurn, playback: TtsPlayback) -> bool:
+        if playback.state != "finished" or turn.planner is None:
+            return False
+        if not turn.planner.is_last(playback.utterance_id):
+            return False
+        if len(turn.playback_started_ms) != 1 or not turn.utterance_texts:
+            return False
+        first_utterance_id = turn.utterance_texts[0][0]
+        if first_utterance_id not in turn.playback_started_ms:
+            return False
+        marked = {
+            event.utterance_id
+            for event in turn.playbacks
+            if event.state in ("mark", "finished")
+        }
+        return all(utterance_id in marked for utterance_id, _ in turn.utterance_texts)
+
+    def _add_agent_playback_duration(self, turn: _ActiveTurn, duration_ms: int) -> None:
+        duration_ms = max(0, duration_ms)
         turn.tts_ms = self._checked_usage_add(
-            turn.tts_ms,
-            max(0, ended_ms - started_ms),
-            MAX_CONTROL_DURATION_MS,
+            turn.tts_ms, duration_ms, MAX_CONTROL_DURATION_MS
+        )
+        turn.agent_talk_ms = self._checked_usage_add(
+            turn.agent_talk_ms, duration_ms, MAX_CONTROL_DURATION_MS
         )
 
     def _checked_usage_add(self, current: int, incoming: int, limit: int) -> int:
