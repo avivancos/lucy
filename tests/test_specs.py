@@ -3,6 +3,8 @@ from pydantic import ValidationError
 
 from lucy.specs import (
     AgentSpec,
+    AsteriskTransportMode,
+    AsteriskTransportSpec,
     CrmSpec,
     EvalSpec,
     FunnelStage,
@@ -11,6 +13,7 @@ from lucy.specs import (
     ObservabilitySpec,
     RagSpec,
     VoiceSpec,
+    resolve_asterisk_transport,
 )
 
 
@@ -77,4 +80,68 @@ def test_voice_modulation_bounds_are_validated():
             stt_provider="deepgram",
             tts_provider="elevenlabs",
             modulation={"pace": 4.0},
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "mode"),
+    [
+        ("asterisk/audiosocket", AsteriskTransportMode.AUDIO_SOCKET),
+        ("asterisk/media_websocket", AsteriskTransportMode.MEDIA_WEBSOCKET),
+        ("asterisk/ari_external_media", AsteriskTransportMode.ARI_EXTERNAL_MEDIA),
+    ],
+)
+def test_asterisk_transport_resolves_registered_spec_strings(value, mode):
+    assert resolve_asterisk_transport(value) == AsteriskTransportSpec(mode=mode)
+
+
+def test_asterisk_transport_resolves_typed_spec_without_losing_identity():
+    transport = AsteriskTransportSpec(mode=AsteriskTransportMode.MEDIA_WEBSOCKET)
+
+    assert resolve_asterisk_transport(transport) is transport
+    assert transport.spec_string == "asterisk/media_websocket"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "asterisk",
+        "asterisk/unknown",
+        "asterisk/audiosocket/extra",
+        "asterisk /audiosocket",
+        "other/audiosocket",
+    ],
+)
+def test_asterisk_transport_rejects_unregistered_or_malformed_specs(value):
+    with pytest.raises(ValueError, match="Asterisk transport spec"):
+        resolve_asterisk_transport(value)
+
+
+def test_voice_spec_preserves_frozen_string_transport_abi():
+    voice = VoiceSpec(
+        transport="asterisk/audiosocket",
+        stt_provider="deepgram",
+        tts_provider="elevenlabs",
+    )
+
+    assert voice.transport == "asterisk/audiosocket"
+    assert voice.model_dump(mode="json")["transport"] == "asterisk/audiosocket"
+
+
+def test_voice_spec_resolves_asterisk_transport_string_through_registry():
+    voice = VoiceSpec(
+        transport="asterisk/ari_external_media",
+        stt_provider="deepgram",
+        tts_provider="elevenlabs",
+    )
+
+    assert voice.transport == "asterisk/ari_external_media"
+
+
+def test_voice_spec_rejects_unknown_asterisk_transport_string():
+    with pytest.raises(ValidationError, match="Asterisk transport spec"):
+        VoiceSpec(
+            transport="asterisk/unknown",
+            stt_provider="deepgram",
+            tts_provider="elevenlabs",
         )

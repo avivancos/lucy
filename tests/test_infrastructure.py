@@ -24,8 +24,12 @@ def test_docker_compose_defines_lucy_local_stack():
     # The dashboard moved to lucy-platform (card 21); lucy no longer ships it.
     assert "lucy-dashboard" not in services
 
-    assert services["lucy-api"]["ports"] == ["${LUCY_API_HOST_PORT:-8000}:8000"]
-    assert services["lucy-media-gateway"]["ports"] == ["8081:8081"]
+    assert services["lucy-api"]["ports"] == [
+        "127.0.0.1:${LUCY_API_HOST_PORT:-8000}:8000"
+    ]
+    assert services["lucy-media-gateway"]["ports"] == [
+        "127.0.0.1:${LUCY_GATEWAY_HEALTH_HOST_PORT:-8081}:8081"
+    ]
     assert services["otel-collector"]["volumes"] == [
         "./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"
     ]
@@ -36,6 +40,7 @@ def test_dockerfiles_and_otel_config_exist():
         ".dockerignore",
         "Dockerfile.api",
         "media-gateway-rust/Dockerfile",
+        "media-gateway-rust/Dockerfile.test",
         "media-gateway-rust/Cargo.toml",
         "media-gateway-rust/src/main.rs",
         "infra/otel-collector-config.yaml",
@@ -60,6 +65,11 @@ def test_docker_compose_gateway_profiles():
     assert services["lucy-dev-gateway"]["profiles"] == ["test"]
     assert services["lucy-gateway-session"]["profiles"] == ["gateway-it"]
     assert services["lucy-gateway-tests"]["profiles"] == ["gateway-it"]
+    assert services["lucy-gateway-tests"]["build"] == {
+        "context": "./media-gateway-rust",
+        "dockerfile": "Dockerfile.test",
+    }
+    assert "image" not in services["lucy-gateway-tests"]
 
 
 def test_dockerignore_keeps_build_context_lean_without_hiding_project_sources():
@@ -142,8 +152,14 @@ def test_telephony_lab_profile_exists():
         "LUCY_TELEPHONY_ARI_USER",
         "LUCY_TELEPHONY_CALL_POLL_INTERVAL_SECONDS",
         "LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS",
+        "LUCY_TELEPHONY_TEST_EXTENSION",
+        "LUCY_GATEWAY_HEALTH_HOST",
+        "LUCY_GATEWAY_HEALTH_PORT",
     }
-    assert caller["depends_on"] == {"asterisk": {"condition": "service_healthy"}}
+    assert caller["depends_on"] == {
+        "asterisk": {"condition": "service_healthy"},
+        "lucy-media-gateway": {"condition": "service_healthy"},
+    }
     assert caller["entrypoint"] == [
         "python3",
         "/opt/lucy-asterisk/scripts/originate_call.py",
@@ -208,7 +224,109 @@ def test_telephony_lab_example_environment_is_complete():
         "LUCY_TELEPHONY_RTP_PORT_END": "10019",
         "LUCY_TELEPHONY_RTP_PORT_START": "10000",
         "LUCY_TELEPHONY_SIP_HOST_PORT": "15060",
+        "LUCY_TELEPHONY_TEST_EXTENSION": "lucy-audiosocket",
+        "LUCY_TELEPHONY_TRANSPORT_MODE": "audiosocket",
     }
+
+    gateway_settings = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line.startswith(("LUCY_ASTERISK_", "LUCY_GATEWAY_"))
+    )
+    assert {
+        "LUCY_ASTERISK_ARI_APP",
+        "LUCY_ASTERISK_ARI_BASE_URL",
+        "LUCY_ASTERISK_ARI_CALLER_CHANNEL_ID",
+        "LUCY_ASTERISK_ARI_EVENTS_HANDSHAKE_TIMEOUT_MS",
+        "LUCY_ASTERISK_ARI_EVENTS_IDLE_TIMEOUT_MS",
+        "LUCY_ASTERISK_ARI_EVENTS_WS_URL",
+        "LUCY_ASTERISK_ARI_PASSWORD",
+        "LUCY_ASTERISK_ARI_REQUEST_TIMEOUT_MS",
+        "LUCY_ASTERISK_ARI_USERNAME",
+        "LUCY_GATEWAY_ARI_RTP_ADVERTISED",
+        "LUCY_GATEWAY_ARI_RTP_BIND",
+        "LUCY_GATEWAY_ARI_RTP_CLOCK_RATE_HZ",
+        "LUCY_GATEWAY_ARI_RTP_IDLE_TIMEOUT_MS",
+        "LUCY_GATEWAY_ARI_RTP_PAYLOAD_TYPE",
+        "LUCY_GATEWAY_CONTROL_CONNECT_TIMEOUT_MS",
+        "LUCY_GATEWAY_MEDIA_WEBSOCKET_BIND",
+    } <= gateway_settings.keys()
+
+
+def test_gateway_control_auth_is_fail_closed_in_committed_compose():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+    example_settings = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line.startswith("LUCY_GATEWAY_CONTROL_TOKEN=")
+    )
+
+    assert example_settings == {"LUCY_GATEWAY_CONTROL_TOKEN": ""}
+    for service_name in [
+        "lucy-api",
+        "lucy-media-gateway",
+        "lucy-gateway-session",
+        "lucy-dev-gateway",
+    ]:
+        assert services[service_name]["environment"]["LUCY_GATEWAY_CONTROL_TOKEN"] == (
+            "${LUCY_GATEWAY_CONTROL_TOKEN:-}"
+        )
+
+
+def test_gateway_compose_wires_every_asterisk_transport_mode():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    environment = compose["services"]["lucy-media-gateway"]["environment"]
+
+    expected = {
+        "LUCY_GATEWAY_MEDIA_WEBSOCKET_BIND": (
+            "${LUCY_GATEWAY_MEDIA_WEBSOCKET_BIND:-0.0.0.0:9093}"
+        ),
+        "LUCY_GATEWAY_CONTROL_CONNECT_TIMEOUT_MS": (
+            "${LUCY_GATEWAY_CONTROL_CONNECT_TIMEOUT_MS:-5000}"
+        ),
+        "LUCY_ASTERISK_ARI_BASE_URL": (
+            "${LUCY_ASTERISK_ARI_BASE_URL:-http://asterisk:8088/ari/}"
+        ),
+        "LUCY_ASTERISK_ARI_EVENTS_WS_URL": (
+            "${LUCY_ASTERISK_ARI_EVENTS_WS_URL:-ws://asterisk:8088/ari/events?app=lucy-voice}"
+        ),
+        "LUCY_ASTERISK_ARI_USERNAME": "${LUCY_ASTERISK_ARI_USERNAME:-lucy-lab}",
+        "LUCY_ASTERISK_ARI_PASSWORD": ("${LUCY_ASTERISK_ARI_PASSWORD:-lucy-lab-only}"),
+        "LUCY_ASTERISK_ARI_APP": "${LUCY_ASTERISK_ARI_APP:-lucy-voice}",
+        "LUCY_ASTERISK_ARI_CALLER_CHANNEL_ID": (
+            "${LUCY_ASTERISK_ARI_CALLER_CHANNEL_ID:-replace-with-active-channel-id}"
+        ),
+        "LUCY_ASTERISK_ARI_REQUEST_TIMEOUT_MS": (
+            "${LUCY_ASTERISK_ARI_REQUEST_TIMEOUT_MS:-5000}"
+        ),
+        "LUCY_ASTERISK_ARI_EVENTS_HANDSHAKE_TIMEOUT_MS": (
+            "${LUCY_ASTERISK_ARI_EVENTS_HANDSHAKE_TIMEOUT_MS:-5000}"
+        ),
+        "LUCY_ASTERISK_ARI_EVENTS_IDLE_TIMEOUT_MS": (
+            "${LUCY_ASTERISK_ARI_EVENTS_IDLE_TIMEOUT_MS:-30000}"
+        ),
+        "LUCY_ASTERISK_ARI_ALLOW_INSECURE_HTTP": (
+            "${LUCY_ASTERISK_ARI_ALLOW_INSECURE_HTTP:-true}"
+        ),
+        "LUCY_GATEWAY_ARI_RTP_BIND": "${LUCY_GATEWAY_ARI_RTP_BIND:-0.0.0.0:9094}",
+        "LUCY_GATEWAY_ARI_RTP_ADVERTISED": (
+            "${LUCY_GATEWAY_ARI_RTP_ADVERTISED:-lucy-media-gateway:9094}"
+        ),
+        "LUCY_GATEWAY_ARI_RTP_PAYLOAD_TYPE": (
+            "${LUCY_GATEWAY_ARI_RTP_PAYLOAD_TYPE:-118}"
+        ),
+        "LUCY_GATEWAY_ARI_RTP_CLOCK_RATE_HZ": (
+            "${LUCY_GATEWAY_ARI_RTP_CLOCK_RATE_HZ:-16000}"
+        ),
+        "LUCY_GATEWAY_ARI_RTP_IDLE_TIMEOUT_MS": (
+            "${LUCY_GATEWAY_ARI_RTP_IDLE_TIMEOUT_MS:-30000}"
+        ),
+    }
+    assert expected.items() <= environment.items()
+
+    dockerfile = (ROOT / "media-gateway-rust/Dockerfile").read_text(encoding="utf-8")
+    assert "EXPOSE 8081 9092 9093 9094/udp" in dockerfile
 
 
 def test_telephony_lab_keeps_media_out_of_python_and_host_ports_local():
@@ -228,3 +346,69 @@ def test_telephony_lab_keeps_media_out_of_python_and_host_ports_local():
     guide = (ROOT / "docs/local-telephony-lab.md").read_text(encoding="utf-8")
     assert "docker compose --profile telephony-lab run --rm telephony-caller" in guide
     assert "audio frames never enter Python" in guide
+
+
+def test_telephony_lab_routes_adapter_smoke_through_rust_gateway():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+    gateway = services["lucy-media-gateway"]
+    caller = services["telephony-caller"]
+
+    assert gateway["environment"]["LUCY_GATEWAY_AUDIO_SOCKET_BIND"] == (
+        "${LUCY_GATEWAY_AUDIO_SOCKET_BIND:-0.0.0.0:9092}"
+    )
+    assert gateway["environment"]["LUCY_TELEPHONY_TRANSPORT_MODE"] == (
+        "${LUCY_TELEPHONY_TRANSPORT_MODE:-audiosocket}"
+    )
+    assert gateway["environment"]["LUCY_GATEWAY_MEDIA_BACKEND"] == (
+        "${LUCY_GATEWAY_MEDIA_BACKEND:-fixture}"
+    )
+    provider_environment = {
+        "LUCY_GATEWAY_DEEPGRAM_URL",
+        "LUCY_GATEWAY_DEEPGRAM_MODEL",
+        "LUCY_GATEWAY_DEEPGRAM_API_KEY",
+        "LUCY_GATEWAY_DEEPGRAM_SAMPLE_RATE_HZ",
+        "LUCY_GATEWAY_DEEPGRAM_FRAME_BYTES",
+        "LUCY_GATEWAY_DEEPGRAM_ENDPOINTING_MS",
+        "LUCY_GATEWAY_ELEVENLABS_URL",
+        "LUCY_GATEWAY_ELEVENLABS_MODEL",
+        "LUCY_GATEWAY_ELEVENLABS_VOICE_ID",
+        "LUCY_GATEWAY_ELEVENLABS_API_KEY",
+        "LUCY_GATEWAY_ELEVENLABS_OUTPUT_FORMAT",
+        "LUCY_GATEWAY_ELEVENLABS_SAMPLE_RATE_HZ",
+        "LUCY_GATEWAY_ELEVENLABS_PLAYBACK_FRAME_MS",
+        "LUCY_GATEWAY_PROVIDER_CONNECT_TIMEOUT_MS",
+        "LUCY_GATEWAY_PROVIDER_IDLE_TIMEOUT_MS",
+    }
+    assert provider_environment <= gateway["environment"].keys()
+    assert gateway["environment"]["LUCY_GATEWAY_DEEPGRAM_API_KEY"] == (
+        "${LUCY_GATEWAY_DEEPGRAM_API_KEY:-}"
+    )
+    assert gateway["environment"]["LUCY_GATEWAY_ELEVENLABS_API_KEY"] == (
+        "${LUCY_GATEWAY_ELEVENLABS_API_KEY:-}"
+    )
+    assert gateway["volumes"] == ["./tests/fixtures/audio:/fixtures/audio:ro"]
+    assert gateway["cap_drop"] == ["ALL"]
+    assert gateway["security_opt"] == ["no-new-privileges:true"]
+    assert caller["environment"]["LUCY_TELEPHONY_TEST_EXTENSION"] == (
+        "${LUCY_TELEPHONY_TEST_EXTENSION:-lucy-audiosocket}"
+    )
+    assert caller["environment"]["LUCY_GATEWAY_HEALTH_HOST"] == (
+        "${LUCY_GATEWAY_HEALTH_HOST:-lucy-media-gateway}"
+    )
+    assert caller["environment"]["LUCY_GATEWAY_HEALTH_PORT"] == (
+        "${LUCY_GATEWAY_HEALTH_PORT:-8081}"
+    )
+    assert caller["depends_on"] == {
+        "asterisk": {"condition": "service_healthy"},
+        "lucy-media-gateway": {"condition": "service_healthy"},
+    }
+
+    dialplan = (ROOT / "infra/asterisk/config/extensions.conf.template").read_text(
+        encoding="utf-8"
+    )
+    assert "exten = play-fixture,1,Playback(lucy/booking_caller_8k)" in dialplan
+    dockerfile = (ROOT / "media-gateway-rust/Dockerfile").read_text(encoding="utf-8")
+    assert "EXPOSE 8081 9092" in dockerfile
+    assert 'CMD ["lucy-media-gateway", "healthcheck"]' in dockerfile
+    assert "USER lucy" in dockerfile

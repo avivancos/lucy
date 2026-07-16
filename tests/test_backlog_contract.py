@@ -89,7 +89,7 @@ def test_every_existing_card_is_mapped_to_exactly_one_sprint():
     rows = re.findall(r"^\| S\d+ [^|]*\| [^|]*\| ([^|]*)\|", text, re.M)
     listed: list[int] = []
     for row in rows:
-        listed.extend(int(n) for n in re.findall(r"\b(\d{2})\b", row))
+        listed.extend(int(n) for n in re.findall(r"\b(\d{2,3})\b", row))
     duplicated = sorted({n for n in listed if listed.count(n) > 1})
     assert not duplicated, f"cards mapped to more than one sprint: {duplicated}"
     orphans = []
@@ -111,7 +111,7 @@ def test_sprint_index_non_platform_cards_exist_locally():
     }
     missing = []
     for row in rows:
-        for number, platform_marker in re.findall(r"\b(\d{2})(\*)?", row):
+        for number, platform_marker in re.findall(r"\b(\d{2,3})(\*)?", row):
             card = int(number)
             if not platform_marker and card not in existing:
                 missing.append(card)

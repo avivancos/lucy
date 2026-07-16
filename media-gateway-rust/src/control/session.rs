@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{self, protocol::Message},
+    tungstenite::{self, client::IntoClientRequest, http::HeaderValue, protocol::Message},
     MaybeTlsStream, WebSocketStream,
 };
 
@@ -28,10 +28,11 @@ pub enum GatewayMode {
     SessionOneshot,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GatewayConfig {
     pub mode: GatewayMode,
     pub session_ws_url: Option<String>,
+    pub control_token: Option<String>,
     pub audio_fixture_wav: Option<PathBuf>,
     pub audio_fixture_timeline: Option<PathBuf>,
     pub pacing_ms: u64,
@@ -50,12 +51,14 @@ impl GatewayConfig {
             value => return Err(format!("unsupported LUCY_GATEWAY_MODE: {value}").into()),
         };
         let session_ws_url = env::var("LUCY_SESSION_WS_URL").ok();
+        let control_token = env::var("LUCY_GATEWAY_CONTROL_TOKEN").ok();
         let audio_fixture_wav = env::var_os("LUCY_AUDIO_FIXTURE_WAV").map(PathBuf::from);
         let audio_fixture_timeline = env::var_os("LUCY_AUDIO_FIXTURE_TIMELINE").map(PathBuf::from);
         if mode == GatewayMode::SessionOneshot {
             if session_ws_url.is_none() {
                 return Err("LUCY_SESSION_WS_URL is required in session mode".into());
             }
+            validate_control_token(control_token.as_deref())?;
             if audio_fixture_wav.is_none() || audio_fixture_timeline.is_none() {
                 return Err("audio fixture paths are required in session mode".into());
             }
@@ -63,6 +66,7 @@ impl GatewayConfig {
         Ok(Self {
             mode,
             session_ws_url,
+            control_token,
             audio_fixture_wav,
             audio_fixture_timeline,
             pacing_ms: env_u64("LUCY_GATEWAY_PACING_MS", DEFAULT_PACING_MS)?,
@@ -71,6 +75,18 @@ impl GatewayConfig {
                 .unwrap_or_else(|_| DEFAULT_CALLER_ID.to_string()),
         })
     }
+}
+
+fn validate_control_token(token: Option<&str>) -> SessionResult<()> {
+    let token = token.ok_or("LUCY_GATEWAY_CONTROL_TOKEN is required in session mode")?;
+    if token.trim().is_empty()
+        || token
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err("LUCY_GATEWAY_CONTROL_TOKEN is invalid".into());
+    }
+    Ok(())
 }
 
 fn env_u64(name: &str, default: u64) -> SessionResult<u64> {
@@ -210,9 +226,21 @@ impl SessionClient {
             .session_ws_url
             .as_deref()
             .ok_or("session WebSocket URL is required")?;
+        let token = self
+            .config
+            .control_token
+            .as_deref()
+            .ok_or("control token is required")?;
+        validate_control_token(Some(token))?;
+        let authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| "control token is invalid")?;
         let started = Instant::now();
         loop {
-            match connect_async(url).await {
+            let mut request = url.into_client_request()?;
+            request
+                .headers_mut()
+                .insert("authorization", authorization.clone());
+            match connect_async(request).await {
                 Ok((socket, _)) => return Ok(socket),
                 Err(error)
                     if started.elapsed() < Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS) =>
@@ -462,7 +490,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tokio::net::TcpListener;
-    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::handshake::server::{Request, Response},
+    };
 
     fn fixture_paths() -> (PathBuf, PathBuf) {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/audio");
@@ -494,7 +525,15 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = accept_async(stream).await.unwrap();
+            let mut socket = accept_hdr_async(stream, |request: &Request, response: Response| {
+                assert_eq!(
+                    request.headers().get("authorization").unwrap(),
+                    "Bearer test-control-token"
+                );
+                Ok(response)
+            })
+            .await
+            .unwrap();
             let first = socket.next().await.unwrap().unwrap().into_text().unwrap();
             let first: Value = serde_json::from_str(first.as_ref()).unwrap();
             assert_eq!(first["type"], "session.started");
@@ -547,6 +586,7 @@ mod tests {
         let config = GatewayConfig {
             mode: GatewayMode::SessionOneshot,
             session_ws_url: Some(format!("{}://{address}", "ws")),
+            control_token: Some("test-control-token".to_string()),
             audio_fixture_wav: Some(wav),
             audio_fixture_timeline: Some(timeline),
             pacing_ms: 1,

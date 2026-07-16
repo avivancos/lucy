@@ -5,8 +5,10 @@ services:
       dockerfile: Dockerfile.api
     command: uvicorn lucy.api.app:app --host 0.0.0.0 --port 8000
     env_file: .env.example
+    environment:
+      LUCY_GATEWAY_CONTROL_TOKEN: ${LUCY_GATEWAY_CONTROL_TOKEN:-}
     ports:
-      - "${LUCY_API_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${LUCY_API_HOST_PORT:-8000}:8000"
     volumes:
       # Mount the working tree so `docker compose run --rm lucy-api pytest`
       # validates the real repo. Several contract tests resolve ROOT to the
@@ -36,22 +38,76 @@ services:
     environment:
       LUCY_SESSION_WS_URL: ws://lucy-api:8000/v1/session/ws
       LUCY_GATEWAY_MODE: serve
+      LUCY_TELEPHONY_TRANSPORT_MODE: ${LUCY_TELEPHONY_TRANSPORT_MODE:-audiosocket}
+      LUCY_GATEWAY_AUDIO_SOCKET_BIND: ${LUCY_GATEWAY_AUDIO_SOCKET_BIND:-0.0.0.0:9092}
+      LUCY_GATEWAY_AUDIO_SOCKET_ALLOWED_CIDRS: ${LUCY_GATEWAY_AUDIO_SOCKET_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      LUCY_GATEWAY_ALLOW_INSECURE_CONTROL_WS: ${LUCY_GATEWAY_ALLOW_INSECURE_CONTROL_WS:-true}
+      LUCY_GATEWAY_CONTROL_TOKEN: ${LUCY_GATEWAY_CONTROL_TOKEN:-}
+      LUCY_GATEWAY_MEDIA_BACKEND: ${LUCY_GATEWAY_MEDIA_BACKEND:-fixture}
+      LUCY_GATEWAY_DEEPGRAM_URL: ${LUCY_GATEWAY_DEEPGRAM_URL:-wss://api.deepgram.com/v1/listen}
+      LUCY_GATEWAY_DEEPGRAM_MODEL: ${LUCY_GATEWAY_DEEPGRAM_MODEL:-}
+      LUCY_GATEWAY_DEEPGRAM_API_KEY: ${LUCY_GATEWAY_DEEPGRAM_API_KEY:-}
+      LUCY_GATEWAY_DEEPGRAM_SAMPLE_RATE_HZ: ${LUCY_GATEWAY_DEEPGRAM_SAMPLE_RATE_HZ:-16000}
+      LUCY_GATEWAY_DEEPGRAM_FRAME_BYTES: ${LUCY_GATEWAY_DEEPGRAM_FRAME_BYTES:-640}
+      LUCY_GATEWAY_DEEPGRAM_ENDPOINTING_MS: ${LUCY_GATEWAY_DEEPGRAM_ENDPOINTING_MS:-300}
+      LUCY_GATEWAY_ELEVENLABS_URL: ${LUCY_GATEWAY_ELEVENLABS_URL:-wss://api.elevenlabs.io}
+      LUCY_GATEWAY_ELEVENLABS_MODEL: ${LUCY_GATEWAY_ELEVENLABS_MODEL:-}
+      LUCY_GATEWAY_ELEVENLABS_VOICE_ID: ${LUCY_GATEWAY_ELEVENLABS_VOICE_ID:-}
+      LUCY_GATEWAY_ELEVENLABS_API_KEY: ${LUCY_GATEWAY_ELEVENLABS_API_KEY:-}
+      LUCY_GATEWAY_ELEVENLABS_OUTPUT_FORMAT: ${LUCY_GATEWAY_ELEVENLABS_OUTPUT_FORMAT:-pcm_16000}
+      LUCY_GATEWAY_ELEVENLABS_SAMPLE_RATE_HZ: ${LUCY_GATEWAY_ELEVENLABS_SAMPLE_RATE_HZ:-16000}
+      LUCY_GATEWAY_ELEVENLABS_PLAYBACK_FRAME_MS: ${LUCY_GATEWAY_ELEVENLABS_PLAYBACK_FRAME_MS:-20}
+      LUCY_GATEWAY_PROVIDER_CONNECT_TIMEOUT_MS: ${LUCY_GATEWAY_PROVIDER_CONNECT_TIMEOUT_MS:-5000}
+      LUCY_GATEWAY_PROVIDER_IDLE_TIMEOUT_MS: ${LUCY_GATEWAY_PROVIDER_IDLE_TIMEOUT_MS:-30000}
+      LUCY_GATEWAY_MEDIA_FIXTURE_WAV: /fixtures/audio/booking_caller_8k.wav
+      LUCY_GATEWAY_MEDIA_FIXTURE_TIMELINE: /fixtures/audio/booking_caller.timeline.json
+      LUCY_GATEWAY_MEDIA_TRANSCRIPT_TRIGGER_BYTES: ${LUCY_GATEWAY_MEDIA_TRANSCRIPT_TRIGGER_BYTES:-3200}
+      LUCY_GATEWAY_MEDIA_PLAYBACK_CHUNK_BYTES: ${LUCY_GATEWAY_MEDIA_PLAYBACK_CHUNK_BYTES:-320}
+      LUCY_GATEWAY_MEDIA_PLAYBACK_PACING_MS: ${LUCY_GATEWAY_MEDIA_PLAYBACK_PACING_MS:-20}
+      LUCY_GATEWAY_MEDIA_WEBSOCKET_BIND: ${LUCY_GATEWAY_MEDIA_WEBSOCKET_BIND:-0.0.0.0:9093}
+      LUCY_GATEWAY_CONTROL_CONNECT_TIMEOUT_MS: ${LUCY_GATEWAY_CONTROL_CONNECT_TIMEOUT_MS:-5000}
+      LUCY_ASTERISK_ARI_BASE_URL: ${LUCY_ASTERISK_ARI_BASE_URL:-http://asterisk:8088/ari/}
+      LUCY_ASTERISK_ARI_EVENTS_WS_URL: ${LUCY_ASTERISK_ARI_EVENTS_WS_URL:-ws://asterisk:8088/ari/events?app=lucy-voice}
+      LUCY_ASTERISK_ARI_USERNAME: ${LUCY_ASTERISK_ARI_USERNAME:-lucy-lab}
+      LUCY_ASTERISK_ARI_PASSWORD: ${LUCY_ASTERISK_ARI_PASSWORD:-lucy-lab-only}
+      LUCY_ASTERISK_ARI_APP: ${LUCY_ASTERISK_ARI_APP:-lucy-voice}
+      LUCY_ASTERISK_ARI_CALLER_CHANNEL_ID: ${LUCY_ASTERISK_ARI_CALLER_CHANNEL_ID:-replace-with-active-channel-id}
+      LUCY_ASTERISK_ARI_REQUEST_TIMEOUT_MS: ${LUCY_ASTERISK_ARI_REQUEST_TIMEOUT_MS:-5000}
+      LUCY_ASTERISK_ARI_EVENTS_HANDSHAKE_TIMEOUT_MS: ${LUCY_ASTERISK_ARI_EVENTS_HANDSHAKE_TIMEOUT_MS:-5000}
+      LUCY_ASTERISK_ARI_EVENTS_IDLE_TIMEOUT_MS: ${LUCY_ASTERISK_ARI_EVENTS_IDLE_TIMEOUT_MS:-30000}
+      LUCY_ASTERISK_ARI_ALLOW_INSECURE_HTTP: ${LUCY_ASTERISK_ARI_ALLOW_INSECURE_HTTP:-true}
+      LUCY_GATEWAY_ARI_RTP_BIND: ${LUCY_GATEWAY_ARI_RTP_BIND:-0.0.0.0:9094}
+      LUCY_GATEWAY_ARI_RTP_ADVERTISED: ${LUCY_GATEWAY_ARI_RTP_ADVERTISED:-lucy-media-gateway:9094}
+      LUCY_GATEWAY_ARI_RTP_PAYLOAD_TYPE: ${LUCY_GATEWAY_ARI_RTP_PAYLOAD_TYPE:-118}
+      LUCY_GATEWAY_ARI_RTP_CLOCK_RATE_HZ: ${LUCY_GATEWAY_ARI_RTP_CLOCK_RATE_HZ:-16000}
+      LUCY_GATEWAY_ARI_RTP_IDLE_TIMEOUT_MS: ${LUCY_GATEWAY_ARI_RTP_IDLE_TIMEOUT_MS:-30000}
+      LUCY_GATEWAY_ARI_RTP_ALLOWED_CIDRS: ${LUCY_GATEWAY_ARI_RTP_ALLOWED_CIDRS:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     ports:
-      - "8081:8081"
+      - "127.0.0.1:${LUCY_GATEWAY_HEALTH_HOST_PORT:-8081}:8081"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./tests/fixtures/audio:/fixtures/audio:ro
     depends_on:
       - lucy-api
 
   lucy-gateway-tests:
-    image: rust:1.82-bookworm
+    build:
+      context: ./media-gateway-rust
+      dockerfile: Dockerfile.test
     profiles: ["gateway-it"]
     working_dir: /app
     environment:
       LUCY_CONTROL_SCHEMA_DIR: /fixtures/control_schema
       LUCY_AUDIO_FIXTURE_WAV: /fixtures/audio/booking_caller_8k.wav
       LUCY_AUDIO_FIXTURE_TIMELINE: /fixtures/audio/booking_caller.timeline.json
+      LUCY_PROVIDER_FIXTURE_ROOT: /provider-fixtures
     volumes:
       - ./media-gateway-rust:/app
       - ./tests/fixtures:/fixtures:ro
+      - ./packages:/provider-fixtures:ro
     command: cargo test
 
   lucy-gateway-session:
@@ -61,6 +117,7 @@ services:
     profiles: ["gateway-it"]
     environment:
       LUCY_SESSION_WS_URL: ws://lucy-api:8000/v1/session/ws
+      LUCY_GATEWAY_CONTROL_TOKEN: ${LUCY_GATEWAY_CONTROL_TOKEN:-}
       LUCY_GATEWAY_MODE: session-oneshot
       LUCY_AUDIO_FIXTURE_WAV: /fixtures/audio/booking_caller_8k.wav
       LUCY_AUDIO_FIXTURE_TIMELINE: /fixtures/audio/booking_caller.timeline.json
@@ -77,6 +134,7 @@ services:
     profiles: ["test"]
     environment:
       LUCY_SESSION_WS_URL: ws://lucy-api:8000/v1/session/ws
+      LUCY_GATEWAY_CONTROL_TOKEN: ${LUCY_GATEWAY_CONTROL_TOKEN:-}
     depends_on:
       - lucy-api
 
@@ -134,6 +192,9 @@ services:
       LUCY_TELEPHONY_ARI_REQUEST_TIMEOUT_SECONDS: ${LUCY_TELEPHONY_ARI_REQUEST_TIMEOUT_SECONDS:-2}
       LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS: ${LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS:-15}
       LUCY_TELEPHONY_CALL_POLL_INTERVAL_SECONDS: ${LUCY_TELEPHONY_CALL_POLL_INTERVAL_SECONDS:-0.1}
+      LUCY_TELEPHONY_TEST_EXTENSION: ${LUCY_TELEPHONY_TEST_EXTENSION:-lucy-audiosocket}
+      LUCY_GATEWAY_HEALTH_HOST: ${LUCY_GATEWAY_HEALTH_HOST:-lucy-media-gateway}
+      LUCY_GATEWAY_HEALTH_PORT: ${LUCY_GATEWAY_HEALTH_PORT:-8081}
     entrypoint:
       - python3
       - /opt/lucy-asterisk/scripts/originate_call.py
@@ -141,6 +202,8 @@ services:
       - ./infra/asterisk/scripts:/opt/lucy-asterisk/scripts:ro
     depends_on:
       asterisk:
+        condition: service_healthy
+      lucy-media-gateway:
         condition: service_healthy
 
   postgres:

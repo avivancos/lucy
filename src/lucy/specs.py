@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Literal, Optional
+from types import MappingProxyType
+from typing import Dict, List, Literal, Mapping, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lucy.providers import LOCAL_PROVIDER_NAME
 
@@ -23,6 +24,51 @@ class SentimentLabel(str, Enum):
     POSITIVE = "positive"
     NEUTRAL = "neutral"
     NEGATIVE = "negative"
+
+
+class AsteriskTransportMode(str, Enum):
+    AUDIO_SOCKET = "audiosocket"
+    MEDIA_WEBSOCKET = "media_websocket"
+    ARI_EXTERNAL_MEDIA = "ari_external_media"
+
+
+ASTERISK_TRANSPORT_NAMESPACE = "asterisk"
+ASTERISK_TRANSPORT_REGISTRY: Mapping[str, AsteriskTransportMode] = MappingProxyType(
+    {mode.value: mode for mode in AsteriskTransportMode}
+)
+
+
+class InvalidAsteriskTransportSpecError(ValueError):
+    """Raised when a spec does not identify a registered Asterisk transport."""
+
+
+class AsteriskTransportSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: AsteriskTransportMode
+
+    @property
+    def spec_string(self) -> str:
+        return f"{ASTERISK_TRANSPORT_NAMESPACE}/{self.mode.value}"
+
+
+def resolve_asterisk_transport(
+    value: Union[str, AsteriskTransportSpec],
+) -> AsteriskTransportSpec:
+    if isinstance(value, AsteriskTransportSpec):
+        return value
+    parts = value.split("/")
+    if (
+        len(parts) == 2
+        and parts[0] == ASTERISK_TRANSPORT_NAMESPACE
+        and all(part and part == part.strip() for part in parts)
+    ):
+        mode = ASTERISK_TRANSPORT_REGISTRY.get(parts[1])
+        if mode is not None:
+            return AsteriskTransportSpec(mode=mode)
+    raise InvalidAsteriskTransportSpecError(
+        "invalid Asterisk transport spec %r; expected 'asterisk/<mode>'" % value
+    )
 
 
 class VoiceModulationSpec(BaseModel):
@@ -44,6 +90,16 @@ class VoiceSpec(BaseModel):
     vad_enabled: bool = True
     barge_in_enabled: bool = True
     modulation: VoiceModulationSpec = Field(default_factory=VoiceModulationSpec)
+
+    @field_validator("transport", mode="before")
+    @classmethod
+    def validate_registered_transport(cls, value: object) -> object:
+        if isinstance(value, str) and (
+            value == ASTERISK_TRANSPORT_NAMESPACE
+            or value.startswith(f"{ASTERISK_TRANSPORT_NAMESPACE}/")
+        ):
+            return resolve_asterisk_transport(value).spec_string
+        return value
 
 
 class AgentSpec(BaseModel):

@@ -17,6 +17,9 @@ exten = observe,1,NoOp(Lucy lab observer channel)
  same = n,Wait($LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS)
  same = n,Hangup()
 
+exten = play-fixture,1,Playback(lucy/booking_caller_8k)
+ same = n,Hangup()
+
 exten = lucy-audiosocket,1,Answer()
  same = n,Set(LUCY_CALL_ID=$${UUID()})
  same = n,AudioSocket($${LUCY_CALL_ID},$LUCY_TELEPHONY_AUDIO_SOCKET_HOST:$LUCY_TELEPHONY_AUDIO_SOCKET_PORT)

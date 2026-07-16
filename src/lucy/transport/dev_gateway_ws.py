@@ -11,6 +11,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from lucy.evals import SyntheticCallScenario, booking_happy_path
+from lucy.settings import GatewayControlSettings
 from lucy.transport.dev_gateway import LocalGatewaySimulator
 from lucy.transport.golden import canonical_dumps
 from lucy.transport.schema import SttFinal, TtsPlayback, TtsSpeak, parse_event, to_wire
@@ -19,6 +20,10 @@ SESSION_WS_URL_ENV = "LUCY_SESSION_WS_URL"
 
 
 async def run_dev_gateway(url: str, scenario: SyntheticCallScenario) -> dict[str, Any]:
+    settings = GatewayControlSettings()
+    if settings.control_token is None:
+        raise RuntimeError("LUCY_GATEWAY_CONTROL_TOKEN is required")
+    authorization = f"Bearer {settings.control_token.get_secret_value()}"
     simulator = LocalGatewaySimulator(scenario)
     report: dict[str, Any] = {
         "session_id": simulator.session_id,
@@ -31,7 +36,9 @@ async def run_dev_gateway(url: str, scenario: SyntheticCallScenario) -> dict[str
         "clean_close": False,
     }
 
-    async with websockets.connect(url) as websocket:
+    async with websockets.connect(
+        url, additional_headers={"Authorization": authorization}
+    ) as websocket:
 
         async def send_events() -> None:
             async for event in simulator.events():

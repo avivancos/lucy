@@ -34,6 +34,12 @@ class _AriServer(ThreadingHTTPServer):
     stall_requests: bool
 
 
+class _GatewayServer(ThreadingHTTPServer):
+    requests: int
+    complete_after_first_request: bool
+    payload_override: object | None
+
+
 class _AriHandler(BaseHTTPRequestHandler):
     server: _AriServer
 
@@ -87,6 +93,37 @@ class _AriHandler(BaseHTTPRequestHandler):
         return
 
 
+class _GatewayHandler(BaseHTTPRequestHandler):
+    server: _GatewayServer
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract.
+        self.server.requests += 1
+        completed = int(
+            self.server.complete_after_first_request and self.server.requests > 1
+        )
+        payload = self.server.payload_override
+        if payload is None:
+            payload = {
+                "service": "lucy-media-gateway",
+                "status": "ok",
+                "asterisk_sessions_started": completed,
+                "asterisk_sessions_completed": completed,
+                "asterisk_sessions_failed": 0,
+                "asterisk_audio_bytes_received": completed * 640,
+                "asterisk_audio_bytes_sent": completed * 640,
+                "control_messages_forwarded": completed * 2,
+            }
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
 class _ManualPacing:
     def __init__(self) -> None:
         self.now = 0.0
@@ -126,6 +163,24 @@ def _ari_server(
         server.server_close()
 
 
+@contextmanager
+def _gateway_server(
+    *, complete_after_first_request: bool, payload_override: object | None = None
+) -> Iterator[_GatewayServer]:
+    server = _GatewayServer(("127.0.0.1", 0), _GatewayHandler)
+    server.requests = 0
+    server.complete_after_first_request = complete_after_first_request
+    server.payload_override = payload_override
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
 def _configure(monkeypatch: pytest.MonkeyPatch, server: _AriServer) -> None:
     monkeypatch.setenv("LUCY_TELEPHONY_ARI_HOST", "127.0.0.1")
     monkeypatch.setenv("LUCY_TELEPHONY_ARI_PORT", str(server.server_port))
@@ -134,6 +189,13 @@ def _configure(monkeypatch: pytest.MonkeyPatch, server: _AriServer) -> None:
     monkeypatch.setenv("LUCY_TELEPHONY_CALL_TIMEOUT_SECONDS", "1")
     monkeypatch.setenv("LUCY_TELEPHONY_CALL_POLL_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("LUCY_TELEPHONY_ARI_REQUEST_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("LUCY_TELEPHONY_TEST_EXTENSION", "lab-check")
+
+
+def _configure_gateway(monkeypatch: pytest.MonkeyPatch, server: _GatewayServer) -> None:
+    monkeypatch.setenv("LUCY_TELEPHONY_TEST_EXTENSION", "lucy-audiosocket")
+    monkeypatch.setenv("LUCY_GATEWAY_HEALTH_HOST", "127.0.0.1")
+    monkeypatch.setenv("LUCY_GATEWAY_HEALTH_PORT", str(server.server_port))
 
 
 def test_caller_uses_real_ari_requests(monkeypatch, capsys):
@@ -151,6 +213,68 @@ def test_caller_uses_real_ari_requests(monkeypatch, capsys):
     originate_query = server.requests[1][2]
     assert originate_query["endpoint"] == ["Local/lab-check@lucy-lab"]
     assert "channelId" not in originate_query
+
+
+def test_caller_proves_real_audio_socket_adapter_progress(monkeypatch, capsys):
+    with (
+        _ari_server(complete_on_originate=False) as ari_server,
+        _gateway_server(complete_after_first_request=True) as gateway_server,
+    ):
+        _configure(monkeypatch, ari_server)
+        _configure_gateway(monkeypatch, gateway_server)
+        originate_call.main()
+
+    assert "AudioSocket adapter completed" in capsys.readouterr().out
+    assert [(method, path) for method, path, _query in ari_server.requests] == [
+        ("POST", "/ari/channels"),
+    ]
+    originate_query = ari_server.requests[0][2]
+    assert originate_query["endpoint"] == ["Local/lucy-audiosocket@lucy-lab"]
+    assert originate_query["extension"] == ["play-fixture"]
+    assert gateway_server.requests == 2
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (["not", "an", "object"], "non-object"),
+        (
+            {
+                "service": "lucy-media-gateway",
+                "status": "ok",
+                "asterisk_sessions_started": True,
+                "asterisk_sessions_completed": 0,
+                "asterisk_sessions_failed": 0,
+                "asterisk_audio_bytes_received": 0,
+                "asterisk_audio_bytes_sent": 0,
+                "control_messages_forwarded": 0,
+            },
+            "invalid asterisk_sessions_started metric",
+        ),
+        (
+            {
+                "service": "unexpected",
+                "status": "ok",
+                "asterisk_sessions_started": 0,
+                "asterisk_sessions_completed": 0,
+                "asterisk_sessions_failed": 0,
+                "asterisk_audio_bytes_received": 0,
+                "asterisk_audio_bytes_sent": 0,
+                "control_messages_forwarded": 0,
+            },
+            "unexpected service status",
+        ),
+    ],
+)
+def test_caller_rejects_invalid_gateway_health(monkeypatch, payload, message):
+    with _gateway_server(
+        complete_after_first_request=False,
+        payload_override=payload,
+    ) as server:
+        _configure_gateway(monkeypatch, server)
+        monkeypatch.setenv("LUCY_TELEPHONY_ARI_REQUEST_TIMEOUT_SECONDS", "1")
+        with pytest.raises(SystemExit, match=message):
+            originate_call._gateway_health()
 
 
 def test_caller_reports_invalid_ari_credentials(monkeypatch):

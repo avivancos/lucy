@@ -8,7 +8,8 @@ from lucy.serve.app import create_app
 from lucy.transport.dev_gateway_ws import run_dev_gateway
 
 
-def test_dev_gateway_ws_runner_completes_scenario_against_local_server():
+def test_dev_gateway_ws_runner_completes_scenario_against_local_server(monkeypatch):
+    monkeypatch.setenv("LUCY_GATEWAY_CONTROL_TOKEN", "dev-gateway-test-token")
     report = asyncio.run(_run_scenario())
 
     assert report["clean_close"] is True
