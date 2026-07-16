@@ -9,7 +9,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from lucy.session import TurnRecord, VoiceSession
-from lucy.settings import GatewayControlSettings
+from lucy.settings import CpaasTransportSettings, GatewayControlSettings
+from lucy.specs import InvalidCpaasTransportSpecError, resolve_cpaas_transport
 from lucy.transport.golden import canonical_dumps
 from lucy.transport.schema import (
     ControlEvent,
@@ -101,6 +102,25 @@ def register_control_ws(
             await websocket.close(code=PROTOCOL_ERROR_CODE)
             return
 
+        cpaas_provider = None
+        telephony_country_code = None
+        if first.payload.transport.startswith("cpaas/"):
+            try:
+                cpaas_provider = resolve_cpaas_transport(
+                    first.payload.transport
+                ).provider
+            except InvalidCpaasTransportSpecError:
+                await websocket.close(code=PROTOCOL_ERROR_CODE)
+                return
+            cpaas_settings = CpaasTransportSettings()
+            if (
+                cpaas_settings.provider is not None
+                and cpaas_settings.provider is not cpaas_provider
+            ) or cpaas_settings.country_code is None:
+                await websocket.close(code=PROTOCOL_ERROR_CODE)
+                return
+            telephony_country_code = cpaas_settings.country_code
+
         transport = WebSocketGatewayTransport(websocket, first)
         await transport.send(
             Envelope(
@@ -119,6 +139,8 @@ def register_control_ws(
             first.envelope.session_id,
             transport,
             responder=responder,
+            cpaas_provider=cpaas_provider,
+            telephony_country_code=telephony_country_code,
         )
         records = await session.run()
         transport.apply_transport_metrics(records)

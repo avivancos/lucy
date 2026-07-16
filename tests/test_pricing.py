@@ -47,6 +47,7 @@ from lucy.providers import (
 )
 from lucy.rag import InMemoryRagIndex, RagChunk, SpeculativeRagNode
 from lucy.settings import LatencyBudgets, SpeculationSettings
+from lucy.specs import CpaasTransportMode
 from lucy.session import VoiceSession
 from lucy.testing import (
     InMemoryTraceExporter,
@@ -385,6 +386,8 @@ async def _run_session_cost(
     registry: ModelRegistry | None = None,
     llm_provider: str = TEST_LLM_PROVIDER,
     llm_model: str = TEST_LLM_MODEL,
+    cpaas_provider: CpaasTransportMode | None = None,
+    telephony_country_code: str | None = None,
 ):
     budgets = LatencyBudgets()
     clock = ManualClock()
@@ -445,6 +448,8 @@ async def _run_session_cost(
         barge_in_turns=barge_in_turns,
         provider_attribution=provider_attribution,
         provider_registry=resolved_registry,
+        cpaas_provider=cpaas_provider,
+        telephony_country_code=telephony_country_code,
     )
     tracer.flush()
     costs = [event for event in exporter.events if event.type == "cost"]
@@ -475,6 +480,26 @@ async def test_voice_session_emits_one_full_session_cost_event():
     assert event.attribution["tts_audio_seconds"] == pytest.approx(tts_audio_ms / 1000)
     assert event.attribution["telephony_minutes"] == pytest.approx(call_minutes)
     assert event.attribution["llm_cached_prompt_tokens"] == 500
+
+
+async def test_cpaas_voice_session_emits_redacted_cost_dimensions():
+    event, _ = await _run_session_cost(
+        _pricebook(),
+        direction=TelephonyDirection.OUTBOUND,
+        cpaas_provider=CpaasTransportMode.TELNYX,
+        telephony_country_code="ES",
+    )
+
+    assert event.tags == {
+        "telephony.direction": "outbound",
+        "telephony.provider": "cpaas/telnyx",
+        "telephony.country_code": "ES",
+        "telephony.billable_seconds": str(event.cost.billable_audio_minutes * 60)
+        .rstrip("0")
+        .rstrip("."),
+        "telephony.cost_component": "telephony_cost",
+    }
+    assert all("+34" not in value for value in event.tags.values())
 
 
 async def test_cascaded_session_attributes_stt_llm_and_tts_independently():

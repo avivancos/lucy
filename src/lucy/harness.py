@@ -20,6 +20,7 @@ from lucy.providers import ModelRegistry, ProviderIdentity
 from lucy.rag import SpeculativeRagNode
 from lucy.session import Responder, TurnRecord, VoiceSession
 from lucy.settings import LatencyBudgets, SpeculationSettings
+from lucy.specs import CpaasTransportMode
 from lucy.state import Checkpoint, ConversationState
 from lucy.tracing import Span
 from lucy.transport.dev_gateway import LocalGatewaySimulator
@@ -83,6 +84,8 @@ class ConversationHarness:
         speculation: Optional[SpeculationSettings] = None,
         provider_attribution: Optional[Mapping[CostComponent, ProviderIdentity]] = None,
         provider_registry: Optional[ModelRegistry] = None,
+        cpaas_provider: Optional[CpaasTransportMode] = None,
+        telephony_country_code: Optional[str] = None,
     ) -> HarnessResult:
         clock = clock or ManualClock()
         if not tuple(barge_in_turns) and scenario.expected_outcome == "interruption":
@@ -109,6 +112,8 @@ class ConversationHarness:
             speculation=speculation,
             provider_attribution=provider_attribution,
             provider_registry=provider_registry,
+            cpaas_provider=cpaas_provider,
+            telephony_country_code=telephony_country_code,
         )
         records = await session.run()
         checkpoints: List[Checkpoint] = []

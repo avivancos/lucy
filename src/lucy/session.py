@@ -56,6 +56,7 @@ from lucy.metrics import (
     MIN_BILLABLE_AUDIO_MINUTES,
 )
 from lucy.observe import get_tracer
+from lucy.observe.events import CpaasCostMetadata
 from lucy.providers import (
     LOCAL_PROVIDER_NAME,
     Capability,
@@ -77,6 +78,7 @@ from lucy.rag import (
 )
 from lucy.runtime import TurnContext
 from lucy.settings import LatencyBudgets, SpeculationSettings
+from lucy.specs import CpaasTransportMode
 from lucy.speech import TtsPlanner
 from lucy.tracing import Span, TurnSpanTree
 from lucy.transport.schema import (
@@ -279,6 +281,8 @@ class VoiceSession:
         provider_attribution: Optional[Mapping[CostComponent, ProviderIdentity]] = None,
         provider_registry: Optional[ModelRegistry] = None,
         recording_coordinator: Optional["RecordingCoordinator"] = None,
+        cpaas_provider: Optional[CpaasTransportMode] = None,
+        telephony_country_code: Optional[str] = None,
     ) -> None:
         if (responder is None) == (driver is None):
             raise ValueError("exactly one of responder or driver must be set")
@@ -306,6 +310,12 @@ class VoiceSession:
             else load_pricebook()
         )
         self.telephony_direction = telephony_direction
+        if (cpaas_provider is None) != (telephony_country_code is None):
+            raise ValueError(
+                "cpaas_provider and telephony_country_code must be configured together"
+            )
+        self.cpaas_provider = cpaas_provider
+        self.telephony_country_code = telephony_country_code
         driver_registry = getattr(driver, "provider_registry", None)
         self.provider_attribution = self._merge_provider_attribution(
             provider_attribution,
@@ -1283,12 +1293,22 @@ class VoiceSession:
             return
         try:
             if self.tracer.enabled:
+                tags = None
+                if self.cpaas_provider is not None:
+                    assert self.telephony_country_code is not None
+                    tags = CpaasCostMetadata(
+                        direction=self.telephony_direction.value,
+                        provider=self.cpaas_provider,
+                        country_code=self.telephony_country_code,
+                        billable_seconds=(ended_ms - started_ms) / 1_000.0,
+                    ).to_tags()
                 self.tracer.cost(
                     session_id=self.session_id,
                     cost=priced_usage.cost,
                     pricebook_version=self.pricebook.version,
                     attribution=priced_usage.attribution,
                     provider_attribution=self.provider_attribution,
+                    tags=tags,
                 )
         except (OverflowError, ValueError):
             self._drop_pricing_fact()

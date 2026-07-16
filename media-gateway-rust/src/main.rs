@@ -4,6 +4,7 @@ use lucy_media_gateway::asterisk::runtime::{
 };
 use lucy_media_gateway::asterisk::server::{GatewayMetrics, GatewayMetricsSnapshot};
 use lucy_media_gateway::control::session::{GatewayConfig, GatewayMode, SessionClient};
+use lucy_media_gateway::cpaas::runtime::{serve_cpaas, CpaasRuntimeConfig};
 use serde::Serialize;
 use std::env;
 use std::io::{Read, Write};
@@ -11,6 +12,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 const HEALTH_BIND_ENV: &str = "LUCY_GATEWAY_HEALTH_BIND";
+const CPAAS_PROVIDER_ENV: &str = "LUCY_CPAAAS_PROVIDER";
 const DEFAULT_HEALTH_BIND: &str = "0.0.0.0:8081";
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -70,15 +72,32 @@ async fn serve_gateway() -> Result<(), String> {
         .route("/health", get(health))
         .with_state(metrics.clone());
 
-    let transport_config = AsteriskRuntimeConfig::from_env().map_err(|error| error.to_string())?;
-    tokio::select! {
-        result = serve_transport(transport_config, metrics.clone()) => {
-            result.map_err(|error| error.to_string())
+    if nonblank_env(CPAAS_PROVIDER_ENV) {
+        let transport_config = CpaasRuntimeConfig::from_env().map_err(|error| error.to_string())?;
+        tokio::select! {
+            result = serve_cpaas(transport_config) => {
+                result.map_err(|error| error.to_string())
+            }
+            result = axum::serve(health_listener, app) => {
+                result.map_err(|error| format!("serve health endpoint failed: {error}"))
+            }
         }
-        result = axum::serve(health_listener, app) => {
-            result.map_err(|error| format!("serve health endpoint failed: {error}"))
+    } else {
+        let transport_config =
+            AsteriskRuntimeConfig::from_env().map_err(|error| error.to_string())?;
+        tokio::select! {
+            result = serve_transport(transport_config, metrics.clone()) => {
+                result.map_err(|error| error.to_string())
+            }
+            result = axum::serve(health_listener, app) => {
+                result.map_err(|error| format!("serve health endpoint failed: {error}"))
+            }
         }
     }
+}
+
+fn nonblank_env(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| !value.to_string_lossy().trim().is_empty())
 }
 
 #[tokio::main]
@@ -144,5 +163,21 @@ async fn main() {
     if let Err(error) = serve_gateway().await {
         eprintln!("gateway serve mode failed: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nonblank_env;
+
+    #[test]
+    fn blank_compose_value_does_not_select_cpaas_runtime() {
+        const NAME: &str = "LUCY_TEST_CPAAAS_PROVIDER_SELECTION";
+        std::env::set_var(NAME, "   ");
+        assert!(!nonblank_env(NAME));
+        std::env::set_var(NAME, "telnyx");
+        assert!(nonblank_env(NAME));
+        std::env::remove_var(NAME);
+        assert!(!nonblank_env(NAME));
     }
 }

@@ -1,5 +1,7 @@
 import asyncio
 import json
+from pathlib import Path
+import re
 import uuid
 
 import pytest
@@ -19,6 +21,7 @@ from lucy.observe import (
 )
 from lucy.observe.events import (
     BusinessEvent,
+    CpaasCostMetadata,
     CostEvent,
     SessionEndedEvent,
     SessionStartedEvent,
@@ -32,6 +35,10 @@ from lucy.observe.redact import MAX_REDACTION_DEPTH
 from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
 from lucy.testing import InMemoryOtelSpanExporter, InMemoryTraceExporter
 from lucy.testing import LocalMcpCommandTransport
+
+
+CPAAS_FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures" / "cpaas"
+PHONE_NUMBER_PATTERN = re.compile(r"\+?[1-9]\d{7,14}")
 
 
 def _counter():
@@ -51,6 +58,99 @@ def _tracer(exporter, **kwargs):
         id_factory=_counter(),
         **kwargs,
     )
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_events"),
+    [
+        (
+            "telnyx_media_stream.jsonl",
+            {"connected", "start", "media", "stop"},
+        ),
+        (
+            "twilio_media_stream.jsonl",
+            {"connected", "start", "media", "stop"},
+        ),
+    ],
+)
+def test_cpaas_recorded_media_stream_fixture_has_required_redacted_frames(
+    filename,
+    expected_events,
+):
+    path = CPAAS_FIXTURE_DIRECTORY / filename
+    raw_lines = path.read_bytes().splitlines()
+
+    assert raw_lines
+    frames = [json.loads(line) for line in raw_lines]
+    assert {frame["event"] for frame in frames} == expected_events
+    assert all(
+        json.dumps(frame, separators=(",", ":"), ensure_ascii=False).encode()
+        == raw_line
+        for frame, raw_line in zip(frames, raw_lines)
+    )
+    assert not PHONE_NUMBER_PATTERN.search(path.read_text(encoding="utf-8"))
+    assert all("<redacted-" in json.dumps(frame) for frame in frames[1:])
+
+
+def test_cpaas_cost_metadata_uses_typed_wire_tags_without_phone_numbers():
+    metadata = CpaasCostMetadata(
+        direction="outbound",
+        provider="telnyx",
+        country_code="ES",
+        billable_seconds=12.5,
+    )
+    event = CostEvent(
+        event_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        session_id="session-1",
+        emitted_at_ms=1,
+        cost=CostBreakdown(telephony_cost=0.01, billable_audio_minutes=0.25),
+        tags=metadata.to_tags(),
+        provider_attribution={
+            CostComponent.TELEPHONY_COST: ProviderIdentity(provider="telnyx")
+        },
+    )
+
+    wire = event.to_wire()
+    assert wire["tags"] == {
+        "telephony.direction": "outbound",
+        "telephony.provider": "cpaas/telnyx",
+        "telephony.country_code": "ES",
+        "telephony.billable_seconds": "12.5",
+        "telephony.cost_component": "telephony_cost",
+    }
+    assert not PHONE_NUMBER_PATTERN.search(json.dumps(wire))
+
+
+@pytest.mark.parametrize("country_code", ("ZZ", "UK", "es"))
+def test_cpaas_cost_metadata_rejects_unassigned_country_codes(country_code):
+    with pytest.raises(ValidationError):
+        CpaasCostMetadata(
+            direction="outbound",
+            provider="telnyx",
+            country_code=country_code,
+            billable_seconds=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"country_code": "es"},
+        {"country_code": "+34"},
+        {"provider": "unknown"},
+        {"billable_seconds": -1},
+    ],
+)
+def test_cpaas_cost_metadata_rejects_unregistered_or_unsafe_dimensions(payload):
+    values = {
+        "direction": "inbound",
+        "provider": "twilio",
+        "country_code": "ES",
+        "billable_seconds": 1,
+    }
+    values.update(payload)
+    with pytest.raises(ValidationError):
+        CpaasCostMetadata(**values)
 
 
 # -- backward compatibility (pre-card-24 OTel bridge) ------------------------

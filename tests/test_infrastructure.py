@@ -28,7 +28,8 @@ def test_docker_compose_defines_lucy_local_stack():
         "127.0.0.1:${LUCY_API_HOST_PORT:-8000}:8000"
     ]
     assert services["lucy-media-gateway"]["ports"] == [
-        "127.0.0.1:${LUCY_GATEWAY_HEALTH_HOST_PORT:-8081}:8081"
+        "127.0.0.1:${LUCY_GATEWAY_HEALTH_HOST_PORT:-8081}:8081",
+        "127.0.0.1:${LUCY_CPAAAS_MEDIA_HOST_PORT:-19094}:9094",
     ]
     assert services["otel-collector"]["volumes"] == [
         "./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"
@@ -70,6 +71,56 @@ def test_docker_compose_gateway_profiles():
         "dockerfile": "Dockerfile.test",
     }
     assert "image" not in services["lucy-gateway-tests"]
+    assert services["cpaas-smoke"]["profiles"] == ["cpaas-smoke"]
+    assert services["cpaas-smoke"]["command"] == (
+        "python -m lucy.transport.cpaas_smoke"
+    )
+    assert "env_file" not in services["cpaas-smoke"]
+
+
+def test_cpaas_smoke_compose_passes_only_named_environment_inputs():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    environment = compose["services"]["cpaas-smoke"]["environment"]
+
+    assert set(environment) == {
+        "LUCY_CPAAAS_PROVIDER",
+        "LUCY_CPAAAS_ACCOUNT_ID",
+        "LUCY_CPAAAS_API_KEY",
+        "LUCY_CPAAAS_FROM_NUMBER",
+        "LUCY_CPAAAS_TO_NUMBER",
+        "LUCY_CPAAAS_API_BASE_URL",
+        "LUCY_CPAAAS_PUBLIC_WS_URL",
+        "LUCY_CPAAAS_STREAM_AUTH_TOKEN",
+        "LUCY_CPAAAS_ALLOW_INSECURE_LOCAL",
+        "LUCY_CPAAAS_REQUEST_TIMEOUT_SECONDS",
+    }
+    assert all(value.startswith("${LUCY_CPAAAS_") for value in environment.values())
+
+
+def test_media_gateway_compose_wires_cpaas_runtime_without_secrets_file():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    gateway = compose["services"]["lucy-media-gateway"]
+    environment = gateway["environment"]
+
+    assert "env_file" not in gateway
+    for name in {
+        "LUCY_CPAAAS_PROVIDER",
+        "LUCY_CPAAAS_ACCOUNT_ID",
+        "LUCY_CPAAAS_API_KEY",
+        "LUCY_CPAAAS_API_BASE_URL",
+        "LUCY_CPAAAS_PUBLIC_WS_URL",
+        "LUCY_CPAAAS_STREAM_AUTH_TOKEN",
+        "LUCY_CPAAAS_MEDIA_BIND",
+        "LUCY_CPAAAS_ALLOWED_CIDRS",
+        "LUCY_CPAAAS_HANDSHAKE_TIMEOUT_MS",
+        "LUCY_CPAAAS_IDLE_TIMEOUT_MS",
+        "LUCY_CPAAAS_MAX_SESSIONS",
+        "LUCY_CPAAAS_ALLOW_INSECURE_LOCAL",
+    }:
+        assert environment[name].startswith("${LUCY_CPAAAS_")
+    assert environment["LUCY_CPAAAS_MEDIA_BIND"] == (
+        "${LUCY_CPAAAS_MEDIA_BIND:-0.0.0.0:9094}"
+    )
 
 
 def test_dockerignore_keeps_build_context_lean_without_hiding_project_sources():
@@ -326,7 +377,7 @@ def test_gateway_compose_wires_every_asterisk_transport_mode():
     assert expected.items() <= environment.items()
 
     dockerfile = (ROOT / "media-gateway-rust/Dockerfile").read_text(encoding="utf-8")
-    assert "EXPOSE 8081 9092 9093 9094/udp" in dockerfile
+    assert "EXPOSE 8081/tcp 9092/tcp 9093/tcp 9094/tcp 9094/udp" in dockerfile
 
 
 def test_telephony_lab_keeps_media_out_of_python_and_host_ports_local():
@@ -409,6 +460,6 @@ def test_telephony_lab_routes_adapter_smoke_through_rust_gateway():
     )
     assert "exten = play-fixture,1,Playback(lucy/booking_caller_8k)" in dialplan
     dockerfile = (ROOT / "media-gateway-rust/Dockerfile").read_text(encoding="utf-8")
-    assert "EXPOSE 8081 9092" in dockerfile
+    assert "EXPOSE 8081/tcp 9092/tcp" in dockerfile
     assert 'CMD ["lucy-media-gateway", "healthcheck"]' in dockerfile
     assert "USER lucy" in dockerfile

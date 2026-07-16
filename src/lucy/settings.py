@@ -11,11 +11,24 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lucy.limits import MAX_CONTROL_DURATION_MS
-from lucy.specs import AsteriskTransportMode
+from lucy.jurisdiction import IsoCountryCode
+from lucy.specs import AsteriskTransportMode, CpaasTransportMode
 
 
 MIN_NETWORK_PORT = 1
 MAX_NETWORK_PORT = 65_535
+CPAAS_REQUIRED_ENVIRONMENT_VARIABLES = (
+    "LUCY_CPAAAS_PROVIDER",
+    "LUCY_CPAAAS_ACCOUNT_ID",
+    "LUCY_CPAAAS_API_KEY",
+    "LUCY_CPAAAS_FROM_NUMBER",
+    "LUCY_CPAAAS_TO_NUMBER",
+)
+CPAAS_STREAM_ENVIRONMENT_VARIABLES = (
+    "LUCY_CPAAAS_API_BASE_URL",
+    "LUCY_CPAAAS_PUBLIC_WS_URL",
+    "LUCY_CPAAAS_STREAM_AUTH_TOKEN",
+)
 
 
 class LatencyBudgets(BaseSettings):
@@ -156,6 +169,90 @@ class AsteriskTransportSettings(BaseSettings):
         ):
             raise ValueError("ARI credentials are required for ari_external_media mode")
         return self
+
+
+class CpaasTransportSettings(BaseSettings):
+    """Optional CPaaS credentials for explicitly selected PSTN transports."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="LUCY_CPAAAS_",
+        extra="ignore",
+        env_ignore_empty=True,
+    )
+
+    provider: CpaasTransportMode | None = None
+    account_id: SecretStr | None = None
+    api_key: SecretStr | None = None
+    from_number: SecretStr | None = None
+    to_number: SecretStr | None = None
+    api_base_url: str | None = None
+    public_ws_url: str | None = None
+    stream_auth_token: SecretStr | None = None
+    country_code: IsoCountryCode | None = None
+    allow_insecure_local: bool = False
+    request_timeout_seconds: float = Field(default=10.0, gt=0.0, le=60.0)
+
+    @property
+    def missing_credentials(self) -> tuple[str, ...]:
+        values = (
+            self.provider,
+            self.account_id,
+            self.api_key,
+            self.from_number,
+            self.to_number,
+        )
+        return tuple(
+            variable
+            for variable, value in zip(CPAAS_REQUIRED_ENVIRONMENT_VARIABLES, values)
+            if value is None
+        )
+
+    @property
+    def missing_stream_configuration(self) -> tuple[str, ...]:
+        values = (
+            self.api_base_url,
+            self.public_ws_url,
+            self.stream_auth_token,
+        )
+        return tuple(
+            variable
+            for variable, value in zip(CPAAS_STREAM_ENVIRONMENT_VARIABLES, values)
+            if value is None
+            and not (
+                variable == "LUCY_CPAAAS_STREAM_AUTH_TOKEN"
+                and self.provider is CpaasTransportMode.TWILIO
+            )
+        )
+
+    @field_validator(
+        "account_id", "api_key", "from_number", "to_number", "stream_auth_token"
+    )
+    @classmethod
+    def reject_blank_cpaas_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not value.get_secret_value().strip():
+            raise ValueError("CPaaS secret values cannot be blank")
+        return value
+
+    @field_validator("api_base_url", "public_ws_url")
+    @classmethod
+    def reject_unsafe_cpaas_url_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value)
+        if (
+            not parsed.scheme
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "CPaaS URLs cannot contain credentials, query, or fragment"
+            )
+        return value.rstrip("/")
 
 
 class LlmPricing(BaseSettings):

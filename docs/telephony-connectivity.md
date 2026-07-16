@@ -131,6 +131,9 @@ one-off integrations per PBX vendor.
 
 ## 6. Where to register for real PSTN testing (Spain)
 
+The executable CPaaS gateway and live-smoke procedure are documented in
+[`cpaas-pstn.md`](cpaas-pstn.md).
+
 Prices as of mid-2026 research; verify before contracting.
 
 | Provider | Self-signup | Why | Cost anchor |

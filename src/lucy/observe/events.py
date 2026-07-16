@@ -15,9 +15,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from lucy.limits import MAX_PRICEBOOK_VERSION_LENGTH, MAX_USAGE_UNITS
+from lucy.jurisdiction import IsoCountryCode
 from lucy.metrics import CostBreakdown, CostComponent, LatencyWaterfall
 from lucy.privacy import contains_sensitive_text
 from lucy.providers import ProviderIdentity
+from lucy.specs import CpaasTransportMode, CpaasTransportSpec
 from lucy.transport.schema import OpaqueRecordingRef, RecordingContainer
 
 WIRE_VERSION = "1"
@@ -35,6 +37,28 @@ CostAttributionKey = Annotated[str, Field(min_length=1, max_length=64)]
 PriceBookVersion = Annotated[
     str, Field(min_length=1, max_length=MAX_PRICEBOOK_VERSION_LENGTH)
 ]
+
+
+class CpaasCostMetadata(BaseModel):
+    """Typed CPaaS dimensions carried through wire-v1 event tags."""
+
+    direction: Literal["inbound", "outbound"]
+    provider: CpaasTransportMode
+    country_code: IsoCountryCode
+    billable_seconds: NonNegativeFiniteFloat
+    cost_component: Literal["telephony_cost"] = "telephony_cost"
+
+    def to_tags(self) -> Dict[str, str]:
+        seconds = f"{self.billable_seconds:.6f}".rstrip("0").rstrip(".")
+        return {
+            "telephony.direction": self.direction,
+            "telephony.provider": CpaasTransportSpec(
+                provider=self.provider
+            ).spec_string,
+            "telephony.country_code": self.country_code,
+            "telephony.billable_seconds": seconds or "0",
+            "telephony.cost_component": self.cost_component,
+        }
 
 
 class TelemetryEventBase(BaseModel):

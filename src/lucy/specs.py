@@ -32,14 +32,27 @@ class AsteriskTransportMode(str, Enum):
     ARI_EXTERNAL_MEDIA = "ari_external_media"
 
 
+class CpaasTransportMode(str, Enum):
+    TELNYX = "telnyx"
+    TWILIO = "twilio"
+
+
 ASTERISK_TRANSPORT_NAMESPACE = "asterisk"
 ASTERISK_TRANSPORT_REGISTRY: Mapping[str, AsteriskTransportMode] = MappingProxyType(
     {mode.value: mode for mode in AsteriskTransportMode}
+)
+CPAAS_TRANSPORT_NAMESPACE = "cpaas"
+CPAAS_TRANSPORT_REGISTRY: Mapping[str, CpaasTransportMode] = MappingProxyType(
+    {mode.value: mode for mode in CpaasTransportMode}
 )
 
 
 class InvalidAsteriskTransportSpecError(ValueError):
     """Raised when a spec does not identify a registered Asterisk transport."""
+
+
+class InvalidCpaasTransportSpecError(ValueError):
+    """Raised when a spec does not identify a registered CPaaS transport."""
 
 
 class AsteriskTransportSpec(BaseModel):
@@ -50,6 +63,16 @@ class AsteriskTransportSpec(BaseModel):
     @property
     def spec_string(self) -> str:
         return f"{ASTERISK_TRANSPORT_NAMESPACE}/{self.mode.value}"
+
+
+class CpaasTransportSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: CpaasTransportMode
+
+    @property
+    def spec_string(self) -> str:
+        return f"{CPAAS_TRANSPORT_NAMESPACE}/{self.provider.value}"
 
 
 def resolve_asterisk_transport(
@@ -68,6 +91,25 @@ def resolve_asterisk_transport(
             return AsteriskTransportSpec(mode=mode)
     raise InvalidAsteriskTransportSpecError(
         "invalid Asterisk transport spec %r; expected 'asterisk/<mode>'" % value
+    )
+
+
+def resolve_cpaas_transport(
+    value: Union[str, CpaasTransportSpec],
+) -> CpaasTransportSpec:
+    if isinstance(value, CpaasTransportSpec):
+        return value
+    parts = value.split("/")
+    if (
+        len(parts) == 2
+        and parts[0] == CPAAS_TRANSPORT_NAMESPACE
+        and all(part and part == part.strip() for part in parts)
+    ):
+        provider = CPAAS_TRANSPORT_REGISTRY.get(parts[1])
+        if provider is not None:
+            return CpaasTransportSpec(provider=provider)
+    raise InvalidCpaasTransportSpecError(
+        "invalid CPaaS transport spec %r; expected 'cpaas/<provider>'" % value
     )
 
 
@@ -99,6 +141,11 @@ class VoiceSpec(BaseModel):
             or value.startswith(f"{ASTERISK_TRANSPORT_NAMESPACE}/")
         ):
             return resolve_asterisk_transport(value).spec_string
+        if isinstance(value, str) and (
+            value == CPAAS_TRANSPORT_NAMESPACE
+            or value.startswith(f"{CPAAS_TRANSPORT_NAMESPACE}/")
+        ):
+            return resolve_cpaas_transport(value).spec_string
         return value
 
 

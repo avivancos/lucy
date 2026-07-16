@@ -150,6 +150,14 @@ spec. Consumers allocate only that component's amount to its owner. A legacy
 top-level `tags.provider` remains an optional coarse grouping dimension and
 must never override component attribution.
 
+CPaaS adapters may add the redacted tags `telephony.direction`,
+`telephony.provider`, `telephony.country_code`, `telephony.billable_seconds`,
+and `telephony.cost_component` to the cost event. Direction and provider come
+from typed registries, the country code is ISO 3166-1 alpha-2, billable seconds
+is nonnegative, and the cost component is always `telephony_cost`. Phone
+numbers, account identifiers, call-control identifiers, and authentication
+material are never telemetry tags.
+
 Cascaded drivers contribute their registry-resolved LLM identity. The session
 assembler may supply explicit STT and TTS identities from the media-plane stack
 configuration; `VoiceSession` requires those nonlocal identities to exist in

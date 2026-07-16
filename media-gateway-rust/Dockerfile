@@ -12,7 +12,7 @@ WORKDIR /app
 RUN groupadd --system lucy && useradd --system --gid lucy --no-create-home lucy
 COPY --from=builder /app/target/release/lucy-media-gateway /usr/local/bin/lucy-media-gateway
 
-EXPOSE 8081 9092 9093 9094/udp
+EXPOSE 8081/tcp 9092/tcp 9093/tcp 9094/tcp 9094/udp
 
 HEALTHCHECK --interval=2s --timeout=2s --retries=15 \
   CMD ["lucy-media-gateway", "healthcheck"]

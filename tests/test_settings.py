@@ -3,10 +3,11 @@ from pydantic import ValidationError
 
 from lucy.settings import (
     AsteriskTransportSettings,
+    CpaasTransportSettings,
     GatewayControlSettings,
     LatencyBudgets,
 )
-from lucy.specs import AsteriskTransportMode
+from lucy.specs import AsteriskTransportMode, CpaasTransportMode
 
 
 def test_defaults_match_adr_0011_table():
@@ -125,3 +126,68 @@ def test_asterisk_transport_settings_reject_invalid_listener_ports(field, invali
 def test_asterisk_transport_settings_reject_blank_hosts(field):
     with pytest.raises(ValidationError):
         AsteriskTransportSettings(**{field: "  "})
+
+
+def test_cpaas_settings_have_no_inline_provider_or_credential_defaults():
+    settings = CpaasTransportSettings()
+
+    assert settings.provider is None
+    assert settings.account_id is None
+    assert settings.api_key is None
+    assert settings.from_number is None
+    assert settings.to_number is None
+    assert settings.country_code is None
+    assert settings.missing_credentials == (
+        "LUCY_CPAAAS_PROVIDER",
+        "LUCY_CPAAAS_ACCOUNT_ID",
+        "LUCY_CPAAAS_API_KEY",
+        "LUCY_CPAAAS_FROM_NUMBER",
+        "LUCY_CPAAAS_TO_NUMBER",
+    )
+
+
+def test_cpaas_settings_parse_typed_environment_and_redact_sensitive_values(
+    monkeypatch,
+):
+    monkeypatch.setenv("LUCY_CPAAAS_PROVIDER", "telnyx")
+    monkeypatch.setenv("LUCY_CPAAAS_ACCOUNT_ID", "account-redacted")
+    monkeypatch.setenv("LUCY_CPAAAS_API_KEY", "api-key-redacted")
+    monkeypatch.setenv("LUCY_CPAAAS_FROM_NUMBER", "+34600000001")
+    monkeypatch.setenv("LUCY_CPAAAS_TO_NUMBER", "+34600000002")
+    monkeypatch.setenv("LUCY_CPAAAS_COUNTRY_CODE", "ES")
+
+    settings = CpaasTransportSettings()
+
+    assert settings.provider is CpaasTransportMode.TELNYX
+    assert settings.account_id.get_secret_value() == "account-redacted"
+    assert settings.api_key.get_secret_value() == "api-key-redacted"
+    assert settings.from_number.get_secret_value() == "+34600000001"
+    assert settings.to_number.get_secret_value() == "+34600000002"
+    assert settings.country_code == "ES"
+    assert "api-key-redacted" not in repr(settings)
+    assert settings.missing_credentials == ()
+
+
+def test_cpaas_settings_report_only_missing_credentials(monkeypatch):
+    monkeypatch.setenv("LUCY_CPAAAS_PROVIDER", "twilio")
+    monkeypatch.setenv("LUCY_CPAAAS_ACCOUNT_ID", "account-redacted")
+
+    assert CpaasTransportSettings().missing_credentials == (
+        "LUCY_CPAAAS_API_KEY",
+        "LUCY_CPAAAS_FROM_NUMBER",
+        "LUCY_CPAAAS_TO_NUMBER",
+    )
+
+
+@pytest.mark.parametrize("provider", ("unknown", " telnyx "))
+def test_cpaas_settings_reject_unregistered_provider(monkeypatch, provider):
+    monkeypatch.setenv("LUCY_CPAAAS_PROVIDER", provider)
+
+    with pytest.raises(ValidationError):
+        CpaasTransportSettings()
+
+
+@pytest.mark.parametrize("country_code", ("es", "ESP", "E1", "ZZ", ""))
+def test_cpaas_settings_reject_non_iso_country_codes(country_code):
+    with pytest.raises(ValidationError):
+        CpaasTransportSettings(country_code=country_code)

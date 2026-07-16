@@ -4,8 +4,11 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+import lucy.observe as observe_module
+from lucy.observe import Tracer
 from lucy.serve.app import create_app
 from lucy.serve.control_ws import CONTROL_WS_PATH
+from lucy.testing import InMemoryTraceExporter
 from lucy.transport.golden import canonical_dumps
 
 CONTROL_TOKEN = "test-control-token"
@@ -29,11 +32,11 @@ def wire(type_, *, seq=0, turn_id=None, **payload):
     }
 
 
-def start_session(socket):
+def start_session(socket, *, transport="test"):
     socket.send_json(
         wire(
             "session.started",
-            transport="test",
+            transport=transport,
             caller="fixture-caller",
             codecs=["pcm16/8000"],
             features=[],
@@ -166,6 +169,53 @@ def test_transport_metrics_rtt_fills_waterfall_transport_ms():
 
     records = app.state.control_session_records["sess-ws-test"]
     assert records[0].waterfall.transport_ms == 17.5
+
+
+def test_cpaas_control_session_emits_registry_and_jurisdiction_cost_tags(
+    monkeypatch,
+):
+    monkeypatch.setenv("LUCY_CPAAAS_PROVIDER", "telnyx")
+    monkeypatch.setenv("LUCY_CPAAAS_COUNTRY_CODE", "ES")
+    exporter = InMemoryTraceExporter()
+    tracer = Tracer(exporters=[exporter])
+    observe_module.set_tracer(tracer)
+    try:
+        with TestClient(create_app()).websocket_connect(
+            CONTROL_WS_PATH, headers=CONTROL_HEADERS
+        ) as socket:
+            start_session(socket, transport="cpaas/telnyx")
+            socket.send_json(wire("session.ended", seq=1, reason="complete"))
+        tracer.flush()
+    finally:
+        observe_module.set_tracer(None)
+
+    cost = next(event for event in exporter.events if event.type == "cost")
+    assert cost.tags["telephony.provider"] == "cpaas/telnyx"
+    assert cost.tags["telephony.country_code"] == "ES"
+    assert cost.tags["telephony.direction"] == "inbound"
+    assert cost.tags["telephony.cost_component"] == "telephony_cost"
+    assert float(cost.tags["telephony.billable_seconds"]) >= 0
+
+
+def test_cpaas_control_session_rejects_missing_jurisdiction(monkeypatch):
+    monkeypatch.setenv("LUCY_CPAAAS_PROVIDER", "telnyx")
+    monkeypatch.delenv("LUCY_CPAAAS_COUNTRY_CODE", raising=False)
+
+    with TestClient(create_app()).websocket_connect(
+        CONTROL_WS_PATH, headers=CONTROL_HEADERS
+    ) as socket:
+        socket.send_json(
+            wire(
+                "session.started",
+                transport="cpaas/telnyx",
+                caller="fixture-caller",
+                codecs=["pcm16/16000"],
+                features=[],
+            )
+        )
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+        assert closed.value.code == 1002
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,8 @@ from lucy.specs import (
     AgentSpec,
     AsteriskTransportMode,
     AsteriskTransportSpec,
+    CpaasTransportMode,
+    CpaasTransportSpec,
     CrmSpec,
     EvalSpec,
     FunnelStage,
@@ -14,6 +16,7 @@ from lucy.specs import (
     RagSpec,
     VoiceSpec,
     resolve_asterisk_transport,
+    resolve_cpaas_transport,
 )
 
 
@@ -145,3 +148,39 @@ def test_voice_spec_rejects_unknown_asterisk_transport_string():
             stt_provider="deepgram",
             tts_provider="elevenlabs",
         )
+
+
+@pytest.mark.parametrize(
+    ("value", "provider"),
+    [
+        ("cpaas/telnyx", CpaasTransportMode.TELNYX),
+        ("cpaas/twilio", CpaasTransportMode.TWILIO),
+    ],
+)
+def test_cpaas_transport_resolves_registered_spec_strings(value, provider):
+    assert resolve_cpaas_transport(value) == CpaasTransportSpec(provider=provider)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "cpaas",
+        "cpaas/unknown",
+        "cpaas/telnyx/extra",
+        "cpaas /telnyx",
+        "other/telnyx",
+    ],
+)
+def test_cpaas_transport_rejects_unregistered_or_malformed_specs(value):
+    with pytest.raises(ValueError, match="CPaaS transport spec"):
+        resolve_cpaas_transport(value)
+
+
+def test_voice_spec_resolves_cpaas_transport_string_through_registry():
+    voice = VoiceSpec(
+        transport="cpaas/telnyx",
+        stt_provider="deepgram",
+        tts_provider="elevenlabs",
+    )
+
+    assert voice.transport == "cpaas/telnyx"

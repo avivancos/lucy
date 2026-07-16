@@ -1,0 +1,4 @@
+{"event":"connected","version":"1.0.0"}
+{"event":"start","sequence_number":"1","start":{"call_control_id":"<redacted-call-control-id>","call_session_id":"<redacted-call-session-id>","from":"<redacted-from-number>","media_format":{"channels":1,"encoding":"PCMU","sample_rate":8000},"to":"<redacted-to-number>","user_id":"<redacted-user-id>"},"stream_id":"<redacted-stream-id>"}
+{"event":"media","media":{"chunk":"1","payload":"AA==","timestamp":"0","track":"inbound_track"},"sequence_number":"2","stream_id":"<redacted-stream-id>"}
+{"event":"stop","sequence_number":"3","stop":{"call_control_id":"<redacted-call-control-id>","user_id":"<redacted-user-id>"},"stream_id":"<redacted-stream-id>"}
