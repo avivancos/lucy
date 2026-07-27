@@ -50,10 +50,21 @@ Bring up the core services:
 sudo docker compose up -d lucy-api lucy-dashboard
 ```
 
-- API: <http://localhost:8000> (`/docs`, `/redoc`, `/openapi.json`)
-- Dashboard: <http://localhost:3000>
+Lucy uses dedicated host ports (so they do not clash with other local stacks):
 
-`postgres`, `redis`, `otel-collector`, `lucy-worker`, and `lucy-media-gateway`
+| Service | Host port | Container port |
+| --- | --- | --- |
+| `lucy-api` | **8010** | 8000 |
+| `lucy-dashboard` | **3010** | 3000 |
+| `postgres` | **5419** | 5432 |
+| `redis` | **6310** | 6379 |
+
+- API: <http://localhost:8010> (`/docs`, `/redoc`, `/openapi.json`)
+- Dashboard: <http://localhost:3010> (browser calls the API at `http://localhost:8010`)
+
+`.env.example` keeps the Docker-network URLs (`postgres:5432`, `redis:6379`) because containers talk to each other on the compose network, not via host ports.
+
+`otel-collector`, `lucy-worker`, and `lucy-media-gateway`
 are declared in `docker-compose.yml` but are not on the active request path yet,
 so they are optional for local end-to-end work.
 
@@ -108,11 +119,11 @@ The Pili CRM/booking flow exercises the product's core value (voice event ->
 MCP CRM tools -> booking hold):
 
 ```bash
-curl -s -X POST http://localhost:8000/pili/voice/events \
+curl -s -X POST http://localhost:8010/pili/voice/events \
   -H "Content-Type: application/json" \
   -d '{"session_id":"sess_001","lead_id":"lead_001","funnel_stage":"interested","sentiment":"positive","cost_per_minute":0.12,"transcript_excerpt":"I would like to book a demo."}'
 
-curl -s -X POST http://localhost:8000/pili/bookings \
+curl -s -X POST http://localhost:8010/pili/bookings \
   -H "Content-Type: application/json" \
   -d '{"session_id":"sess_001","lead_id":"lead_001","requested_slot":"2026-08-03T15:00:00Z","timezone":"Europe/Madrid","source":"voice"}'
 ```

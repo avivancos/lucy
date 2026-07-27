@@ -40,9 +40,11 @@ This file is the source of truth for project operating rules.
 
 Services (see `docker-compose.yml` for the canonical definitions):
 
-- `lucy-api` — FastAPI control plane on `:8000` (`/docs`, `/openapi.json`, and the `pili` CRM/booking flow). Required.
-- `lucy-dashboard` — Next.js ops dashboard on `:3000`, reads the API. Required for UI E2E.
-- `postgres` (`:5432`), `redis` (`:6379`), `lucy-worker`, `lucy-media-gateway` (`:8081`), `otel-collector` — declared but currently not on the active code path; optional for local E2E.
+- `lucy-api` — FastAPI control plane on host `:8010` (container `:8000`; `/docs`, `/openapi.json`, and the `pili` CRM/booking flow). Required.
+- `lucy-dashboard` — Next.js ops dashboard on host `:3010` (container `:3000`), reads the API at `http://localhost:8010`. Required for UI E2E.
+- `postgres` (host `:5419` → container `:5432`), `redis` (host `:6310` → container `:6379`), `lucy-worker`, `lucy-media-gateway` (`:8081`), `otel-collector` — declared but currently not on the active code path; optional for local E2E.
+
+Lucy-specific host ports (avoid clashing with other local stacks): API `8010`, dashboard `3010`, Postgres `5419`, Redis `6310`. Intra-compose service URLs in `.env.example` keep the container ports (`postgres:5432`, `redis:6379`).
 
 Docker is the sanctioned runtime but is NOT auto-started. Start it once per session before any `docker compose` command: `sudo dockerd > /tmp/dockerd.log 2>&1 &` (the daemon uses `fuse-overlayfs` + `iptables-legacy`, already configured). Prefix compose commands with `sudo`.
 
