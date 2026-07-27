@@ -147,10 +147,10 @@ Findings disposition:
 
 
 ## Closing commit
+- Hash: `c2e951b` — Wire Cursor agents and harden Spec/TDD contracts (card 110).
+- Branch: `main` · Files: 33 · Date: 2026-07-27
+- Landed on main: `c2e951b` · 2026-07-27
 
-- Hash: `<short-sha>` — <subject line>
-- Branch: `<branch>` · Files: <n> · Date: <YYYY-MM-DD>
-- Landed on main: pending human merge
 
 ## Pending human testing
 
