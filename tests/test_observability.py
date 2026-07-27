@@ -1,3 +1,5 @@
+# Copyright 2026 Lucy contributors
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import json
 from pathlib import Path
@@ -35,6 +37,10 @@ from lucy.observe.redact import MAX_REDACTION_DEPTH
 from lucy.runtime import GraphExecutionError, GraphExecutor, GraphNode
 from lucy.testing import InMemoryOtelSpanExporter, InMemoryTraceExporter
 from lucy.testing import LocalMcpCommandTransport
+
+_SYNTHETIC_BEARER_MODEL = "Bearer " + "opaque-fixture-credential"
+_SYNTHETIC_SK_MODEL = "sk-" + "fixture-opaque-credential-0000000000"
+_SYNTHETIC_JWT_MODEL = "eyJ" + "header." + "payload." + "signature"
 
 
 CPAAS_FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures" / "cpaas"
@@ -382,14 +388,14 @@ def test_cost_provider_attribution_rejects_non_component_keys():
         {"provider": "127.0.0.1", "model": "nova-3"},
         {"provider": "localhost", "model": "nova-3"},
         {"provider": "api_key=do-not-export", "model": "nova-3"},
-        {"provider": "deepgram", "model": "Bearer secret"},
+        {"provider": "deepgram", "model": _SYNTHETIC_BEARER_MODEL},
         {
             "provider": "deepgram",
-            "model": "sk-proj-1234567890abcdefghijklmnop",
+            "model": _SYNTHETIC_SK_MODEL,
         },
         {
             "provider": "deepgram",
-            "model": "eyJhbGciOiJIUzI1NiJ9.secret.signature",
+            "model": _SYNTHETIC_JWT_MODEL,
         },
     ],
 )
@@ -426,7 +432,9 @@ def test_cost_provider_attribution_revalidates_copied_identity():
 
 
 def test_cost_provider_attribution_drops_configured_secret(monkeypatch):
-    secret = "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
+    from tests.test_secret_fixtures import synthetic_configured_secret
+
+    secret = synthetic_configured_secret()
     monkeypatch.setenv("LUCY_API_KEY", secret)
     exporter = InMemoryTraceExporter()
     tracer = _tracer(exporter)

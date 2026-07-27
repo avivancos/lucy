@@ -61,13 +61,16 @@ async fn response_server(response: Vec<u8>) -> String {
     format!("http://{address}")
 }
 
+const FIXTURE_TELNYX_KEY: &str = "fixture-telnyx-api-credential";
+const FIXTURE_TWILIO_KEY: &str = "fixture-twilio-auth-token";
+
 fn telnyx_client(base_url: &str, timeout: Duration) -> CpaasCallControlClient {
     CpaasCallControlClient::new(
         CpaasCallControlConfig::new(
             CpaasProvider::Telnyx,
             base_url,
             None,
-            "secret-telnyx-key",
+            FIXTURE_TELNYX_KEY,
             true,
             timeout,
         )
@@ -83,7 +86,7 @@ async fn telnyx_hangup_uses_bearer_action_without_logging_credentials() {
         CpaasProvider::Telnyx,
         &base_url,
         None,
-        "secret-telnyx-key",
+        FIXTURE_TELNYX_KEY,
         true,
         Duration::from_secs(1),
     )
@@ -96,8 +99,10 @@ async fn telnyx_hangup_uses_bearer_action_without_logging_credentials() {
 
     let request = request.await.unwrap();
     assert!(request.starts_with("POST /v2/calls/v2:call%2Fcontrol/actions/hangup HTTP/1.1"));
-    assert!(request.contains("authorization: Bearer secret-telnyx-key"));
-    assert_eq!(request.matches("secret-telnyx-key").count(), 1);
+    assert!(
+        request.contains(&format!("authorization: Bearer {FIXTURE_TELNYX_KEY}"))
+    );
+    assert_eq!(request.matches(FIXTURE_TELNYX_KEY).count(), 1);
 }
 
 #[tokio::test]
@@ -107,7 +112,7 @@ async fn twilio_hangup_uses_basic_auth_and_completed_status() {
         CpaasProvider::Twilio,
         &base_url,
         Some("ACREDACTED"),
-        "secret-twilio-token",
+        FIXTURE_TWILIO_KEY,
         true,
         Duration::from_secs(1),
     )
@@ -124,7 +129,7 @@ async fn twilio_hangup_uses_basic_auth_and_completed_status() {
     );
     assert!(request.contains("authorization: Basic "));
     assert!(request.ends_with("Status=completed"));
-    assert!(!request.contains("secret-twilio-token"));
+    assert!(!request.contains(FIXTURE_TWILIO_KEY));
 }
 
 #[test]
@@ -168,7 +173,7 @@ fn call_control_urls_and_credentials_fail_closed() {
 #[tokio::test]
 async fn hangup_rejects_provider_failure_without_exposing_response_body() {
     let base_url = response_server(
-        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 24\r\nConnection: close\r\n\r\nsecret provider response"
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 24\r\nConnection: close\r\n\r\nfixture provider response"
             .to_vec(),
     )
     .await;
@@ -180,7 +185,7 @@ async fn hangup_rejects_provider_failure_without_exposing_response_body() {
         .to_string();
 
     assert_eq!(error, "call-control request returned HTTP 503");
-    assert!(!error.contains("secret provider response"));
+    assert!(!error.contains("fixture provider response"));
 }
 
 #[tokio::test]

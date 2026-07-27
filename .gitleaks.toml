@@ -1,0 +1,23 @@
+title = "Lucy gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local Compose Postgres dev URL in env example"
+paths = ['''\.env\.example$''']
+regexTarget = "match"
+regexes = [
+  '''postgresql://lucy:lucy@postgres:5432/lucy''',
+  '''LUCY_TELEPHONY_ARI_PASSWORD=lucy-lab-only''',
+  '''LUCY_TELEPHONY_PJSIP_PASSWORD=lucy-lab-only''',
+  '''LUCY_ASTERISK_ARI_PASSWORD=lucy-lab-only''',
+  '''lucy-lab-only''',
+  '''password = lucy-lab-only''',
+  '''password = \$LUCY_TELEPHONY''',
+]
+
+[[allowlists]]
+description = "Synthetic sk- prefix in observability rejection tests"
+paths = ['''tests/test_observability\.py$''']
+regexes = ['''sk-fixture-opaque-credential-0000000000''']

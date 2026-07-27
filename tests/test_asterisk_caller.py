@@ -1,3 +1,5 @@
+# Copyright 2026 Lucy contributors
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import base64
@@ -15,8 +17,10 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from tests.test_secret_fixtures import synthetic_ari_password
+
 ARI_USER = "local-ari-user"
-ARI_PASSWORD = "local-ari-password"
+ARI_PASSWORD = synthetic_ari_password()
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[1] / "infra/asterisk/scripts/originate_call.py"
 )
