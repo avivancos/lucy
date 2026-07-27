@@ -21,9 +21,14 @@ def test_docker_compose_defines_lucy_local_stack():
     ]:
         assert service in services
 
-    assert services["lucy-api"]["ports"] == ["8000:8000"]
-    assert services["lucy-dashboard"]["ports"] == ["3000:3000"]
+    assert services["lucy-api"]["ports"] == ["8010:8000"]
+    assert services["lucy-dashboard"]["ports"] == ["3010:3000"]
     assert services["lucy-media-gateway"]["ports"] == ["8081:8081"]
+    assert services["postgres"]["ports"] == ["5419:5432"]
+    assert services["redis"]["ports"] == ["6310:6379"]
+    assert services["lucy-dashboard"]["environment"]["NEXT_PUBLIC_LUCY_API_URL"] == (
+        "http://localhost:8010"
+    )
     assert services["otel-collector"]["volumes"] == [
         "./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"
     ]

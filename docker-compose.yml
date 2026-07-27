@@ -6,7 +6,7 @@ services:
     command: uvicorn lucy.api.app:app --host 0.0.0.0 --port 8000
     env_file: .env.example
     ports:
-      - "8000:8000"
+      - "8010:8000"
     depends_on:
       - postgres
       - redis
@@ -26,9 +26,9 @@ services:
       context: ./dashboard
       dockerfile: Dockerfile
     environment:
-      NEXT_PUBLIC_LUCY_API_URL: http://localhost:8000
+      NEXT_PUBLIC_LUCY_API_URL: http://localhost:8010
     ports:
-      - "3000:3000"
+      - "3010:3000"
     depends_on:
       - lucy-api
 
@@ -46,16 +46,15 @@ services:
       POSTGRES_PASSWORD: lucy
       POSTGRES_DB: lucy
     ports:
-      - "5432:5432"
+      - "5419:5432"
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6310:6379"
 
   otel-collector:
     image: otel/opentelemetry-collector:0.104.0
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
-
