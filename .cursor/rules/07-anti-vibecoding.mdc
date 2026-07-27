@@ -1,0 +1,12 @@
+---
+description: Anti-vibecoding — Think, Surgical, Goal-driven; no silent scope creep
+alwaysApply: true
+---
+
+# Anti-vibecoding
+
+- Think: do not assume; surface confusion; log silent choices in `## Decision log`.
+- Surgical: change only what the chip/spec requires; no drive-by refactors or extras.
+- Goal-driven: every changed line traces to the card Spec or an explicit Decision log entry.
+- "Add validation" means write failing tests for invalid inputs first, then make them pass.
+- Prefer honest partial work in `in_progress/` over fake green.

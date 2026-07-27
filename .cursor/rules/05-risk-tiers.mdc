@@ -1,0 +1,11 @@
+---
+description: Risk tiers T0–T3, Lucy path signals, and Cursor reviewer model routing
+alwaysApply: true
+---
+
+# Risk tiers
+
+- Declare `**Risk tier:** T0–T3` on every card. Default behavior-changing = T2. Escalate when in doubt.
+- T3 signals: media-gateway/Rust media, control-channel schema, telemetry/PII/audio, secrets/`LUCY_*`, MCP authz, public ABI Protocols, plane boundary. Policy files never T0.
+- Review set: T0 none; T1 code-reviewer; T2/T3 full set + final-integrator. Details: `docs/agents/workflows/risk-tiers.md`.
+- Cursor models only: composer-2.5-fast (fast), cursor-grok-4.5-high-fast (high), inherit (session). Escalate composer → grok → inherit. Save cost by tier, not weak judges.

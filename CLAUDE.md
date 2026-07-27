@@ -28,6 +28,12 @@ chips defaults to sonnet; adversarial verification and final verdicts stay on
 the session model. The dev-agent dashboard (`/config/agents/{role}`) holds the
 same table for orchestrated runs; this file documents it for interactive ones.
 
+This table is the Claude Code adapter. Codex uses the separate executable model
+and reasoning policy in `agents.md` and `.codex/agents/*.toml`; Cursor uses
+`.cursor/agents/` with Cursor-native models only (see `AGENTS.md` Cursor
+section and `docs/cursor-agents-adapter.md`). Do not translate model
+identifiers across adapters or treat `max` reasoning as a default.
+
 ## Orchestrator (dev-agent MCP)
 
 State moves and review routing through the orchestrator (and the git-mv

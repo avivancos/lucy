@@ -1,0 +1,12 @@
+---
+description: Backlog-first session rules for Lucy (read before work, auto-carding, WIP)
+alwaysApply: true
+---
+
+# Backlog session
+
+- Before formal implementation: list `backlog/pending/` and `backlog/in_progress/`, one-line summary each, wait for explicit task choice unless the user says `ignore the backlog`.
+- Auto-carding: new implementation work without a covering card → create from `backlog/_TEMPLATE.md`, map in `sprints.md`, then proceed. Dedup across all state folders first.
+- At most one `in_progress/` card per agent. State = folder; flow `pending → in_progress → done → testing → production` (or `need_human_testing`).
+- Moves: orchestrator MCP if connected; else `git mv`. Start commit on `in_progress/`; closing commit + stamp on `done/`. No auto-push/merge to `main` (human gate, honor-system).
+- Canon: `backlog/agent_index.md`.

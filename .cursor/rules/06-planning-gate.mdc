@@ -1,0 +1,11 @@
+---
+description: Constraints before code and planning gate — stop and ask, do not infer
+alwaysApply: true
+---
+
+# Planning gate
+
+Before non-trivial code, state: Spec/card, engineering rules (`AGENTS.md` + `agent_index.md`), ADRs, and Risk tier.
+If any is missing or ambiguous: **stop and ask — do not infer.**
+Prefer Plan Mode for multi-chip or cross-cutting work; get sign-off before writing production code.
+Auto-card first when the request is new implementation without a covering card.

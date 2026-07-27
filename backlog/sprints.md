@@ -17,12 +17,13 @@ order unless the dependency notes say a sprint can start early.
 | S7 Cloud observability seam | Platform | 30, 47*, 48*, 72, 73 | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard; run identity, tags, and blob presign are wired |
 | S8 Launch | Launch | 46, 49, 50, 93 | Public repo installable: `pip install` + quickstart from scratch on a clean machine; launch-base hygiene removed stale API shims |
 | S9 Analytics & SRE observability | Platform/Runtime | 52, 54, 55, 56, 57, 66, 67, 94, 98, 99, 103 | Local run serves an analytics-model-v1 rollup at `/analytics`, Grafana renders RED/USE metrics, and the SDK emits full voice costs, talk-time attribution, provider/RAG attribution, and local budget enforcement |
-| S10 Agent operations | Process | 61, 62, 63, 65 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image; clean API builds keep the Docker context lean |
+| S10 Agent operations | Process | 61, 62, 63, 65, 110 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image; clean API builds keep the Docker context lean; Cursor adapters and hardened Spec/TDD workflows from agents-specs are wired |
 | S11 Platform feed (SDK) | Runtime/Observability | 69, 70, 71 | A simulated call records dual-leg WAVs through LocalGatewaySimulator to a local blob server; `audio_ref` + `cost` + tagged events land in JSONL; the session resumes from Postgres after a process restart |
 | S12 Platform core | Platform | 74*, 75*, 76* | Compose brings up platform Postgres and MinIO; a key is minted; replayed fixtures land in Postgres; a second project's key proves tenant isolation |
 | S13 Trace explorer, recordings, live ops | Platform | 77*, 78*, 79*, 80*, 81*, 82* | Click a session to see turn/span tree, transcript, synced audio playback, waterfall, FTS search, and live replay updates |
 | S14 Money & analytics | Platform | 83*, 58*, 59*, 60*, 84* | Cost Board shows the seven-component split and booked-vs-failed over replayed runs; `/spend?group_by=agent` matches fixture totals; analytics boards render from the semantic API |
 | S15 Evals, alerts & hardening | Platform | 85*, 86*, 87*, 88*, 89*, 90*, 91*, 92* | Two eval runs upload from the SDK harness and diff with regression badges; a cost alert fires a webhook; viewer RBAC and RLS block cross-tenant access |
+| S16 Managed call media plane | Runtime/Telephony | 104, 105, 106, 107, 108, 109 | A real PSTN call streams through provider-neutral Rust drivers, uploads an envelope-encrypted recording to R2, produces acoustic evidence, and transfers speech authority atomically to and from a browser operator |
 
 Cards marked `*` live in `lucy-platform/backlog/` (47 ingest v0, 48 dashboard
 on real traces, 58 analytics warehouse + ETL, 59 analytics query/semantic API,
@@ -68,7 +69,9 @@ for SDK card 73.
   snapshots, percentiles, and every derived metric; it adds no persistence or
   cross-tenant storage.
 - S10 is process tooling: it can run at any time, gates nothing in S2-S8, and
-  card 62 depends on card 61.
+  card 62 depends on card 61. Card 110 depends on 61/62 and adds the Cursor
+  adapter plus agents-specs Spec/TDD hardening (risk tiers, decision log,
+  BLOCKED) without auto-landing to main.
 - S11 feeds the platform from the SDK and should run 69 -> 70 -> 71 after card
   72 gives the platform stable run identity and tags.
 - S12 runs before the materialized S7 platform cards 47*/48*: ingest and the
@@ -76,6 +79,12 @@ for SDK card 73.
 - S13 is the first platform demo gate and unlocks the parked S5 telephony lane.
 - S14 and S15 are post-core platform hardening tracks; ClickHouse stays deferred
   behind card 59's semantic API until measured load requires it.
+- S16 is the bounded open media-plane contribution for the platform call
+  cockpit. It changes internal Rust drivers and the versioned gateway control
+  schema only; it does not change the public provider/spec ABI or telemetry
+  wire v1. Run 104 -> 105 -> 106/107, with card 108 additionally gated by card
+  45's WebRTC dependency verdict. Card 109 requires card 101 and the matching
+  platform cockpit certification.
 
 ## Sprint field convention
 

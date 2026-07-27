@@ -1,0 +1,12 @@
+---
+description: Docker Compose is the only sanctioned Lucy runtime for tests and services
+alwaysApply: true
+---
+
+# Docker only
+
+- Run tests, lint, typecheck, and service boots via Docker Compose.
+- Canonical test command: `docker compose run --rm lucy-api pytest`.
+- Also: `docker compose run --rm lucy-api ruff check src tests`, `ruff format --check`, `mypy src`.
+- Do not treat host-venv pytest as the gate when Docker is available.
+- Record exact commands and observed results; un-run commands are `BLOCKED`.

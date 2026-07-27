@@ -1,0 +1,13 @@
+---
+description: Spec to red to green TDD with one chip at a time and Verify outcomes
+alwaysApply: true
+---
+
+# Spec / TDD / chips
+
+- Formal work: Spec → red behavioral test → green minimal code → refactor → docs.
+- Execute **one chip** at a time from the active card. Each chip names files, the failing test first, and `Verify:` with expected outcome.
+- No mocks (ADR 0003): simulators, local protocol servers, or recorded fixtures only.
+- Inject ManualClock / injectable clocks — no wall-time sleeps.
+- Every feature needs at least one negative test a naive implementation would fail.
+- Do not check a DoD or chip box without running its Verify command.

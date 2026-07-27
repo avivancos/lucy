@@ -1,0 +1,12 @@
+---
+description: Lucy invariants — plane boundary, open-core, no-mocks, typed config, telemetry
+alwaysApply: true
+---
+
+# Lucy invariants
+
+- Plane boundary: audio frames never enter Python; media plane owns the socket; control channel is events/directives only.
+- Open-core: SDK (`src/lucy/`) never imports platform/Pili; voice Protocols/spec models are frozen public ABI.
+- Telemetry: PII redaction, audio suppression, sampling client-side before leave-process (`docs/telemetry-wire-v1.md`).
+- Typed config: no inline provider/model/URL/threshold/budget hardcoding.
+- No-mocks plane (ADR 0003): no mocking frameworks inventing provider behavior.

@@ -16,6 +16,11 @@ dependency notes. It parks at `need_human_testing`, parks on unresolved P0/P1
 review findings, and never pushes. Interactive sessions still follow the
 paragraph above.
 
+**Auto-carding:** if a prompt requests new implementation work not covered by
+an existing card, first create a card from `_TEMPLATE.md`, map it in
+`sprints.md`, then proceed. Search all state folders for duplicates first.
+Questions, explorations, and reviews are not carded.
+
 ## States
 
 ```text
@@ -41,23 +46,41 @@ State moves prefer the orchestrator MCP when connected -
 dashboard. Fallback when the server is not connected: `git mv` between state
 folders (the folder remains the source of truth either way).
 
+Moving a card into `in_progress/` triggers a **start commit** of the card
+alone (`chore(backlog): start card <NNN>`). Moving to `done/` triggers a
+**closing commit** (explicit paths) plus a `## Closing commit` stamp. Agents
+do not auto-merge or push to `main` (human gate, honor-system). See
+`docs/agents/workflows/closing-commit.md`.
+
 ## Review gate (cards >= 61)
 
 Moving a card `in_progress -> done` requires recorded reviewer verdicts in the
 card's `## Review evidence` section (template: `_TEMPLATE.md`; enforced by
-`tests/test_backlog_contract.py`). The applicable reviewers live in
-`.claude/agents/` (see `CLAUDE.md` for the routing and model policy):
+`tests/test_backlog_contract.py`). Review depth follows the card's
+`**Risk tier:**` (`docs/agents/workflows/risk-tiers.md` and
+`docs/agents/workflows/final-review.md`):
 
-- Always: `code-reviewer`, `test-auditor`, `simplicity-reviewer`.
-- When docs/ADRs/README were touched or could go stale: `docs-reviewer`.
-- When telemetry, secrets, MCP permissions, or public surface changed:
-  `security-reviewer` (record NOT_APPLICABLE with a reason otherwise).
+- **T0** — deterministic gates only; no reviewer agents.
+- **T1** — `code-reviewer` only.
+- **T2** (default) — `code-reviewer`, `test-auditor`, `simplicity-reviewer`,
+  plus `docs-reviewer` when docs/ADRs/README were touched or could go stale,
+  plus `security-reviewer` when telemetry/secrets/MCP/public surface changed
+  (otherwise record `NOT_APPLICABLE` with a reason), then `final-integrator`.
+- **T3** — full set with strongest-model escalations; mutation testing or
+  `BLOCKED`.
 
 P0/P1 findings BLOCK the move to `done/` until fixed; P2/P3 need an explicit
-disposition (fixed, follow-up card raised, or rejected with rationale).
+disposition (fixed, follow-up card raised, or rejected with rationale). A
+command not executed is `BLOCKED`, never assumed green.
+
 Request reviews through the orchestrator (`request_review`,
-`request_test_audit`) when connected; otherwise spawn the `.claude/agents/`
-reviewers directly. Cards earlier than 61 predate the gate.
+`request_test_audit`) when connected; otherwise spawn reviewers from
+`.cursor/agents/` (Cursor), `.claude/agents/` (Claude Code), or the matching
+Codex agents. Cards earlier than 61 predate the gate.
+
+Cards from id >= 110 also require `**Risk tier:**` and `## Decision log`
+(enforced by the contract test). Keep chips, Context primer, Failure
+protocol, and Review evidence — do not replace them.
 
 ## Sprints
 
@@ -70,11 +93,12 @@ notes in `sprints.md` allow an early start.
 
 Cards are written so an agent with NO prior project knowledge can execute
 them. `_TEMPLATE.md` is normative; the required sections are: header with
-Sprint/Epic/effort/Depends on/State, Goal, Context primer (exact files to
-read first), Spec (everything enumerated, no "etc."), Chips (ordered atomic
-subtasks with test-first instruction and verify command + expected outcome),
-Do NOT (guardrails), Definition of Done (mechanically verifiable), Failure
-protocol, Improvements noted. `tests/test_backlog_contract.py` enforces this
+Sprint/Epic/effort/Depends on/State/Risk tier, Goal, Context primer (exact
+files to read first), Spec (everything enumerated, no "etc."), Chips (ordered
+atomic subtasks with test-first instruction and verify command + expected
+outcome), Do NOT (guardrails), Definition of Done (mechanically verifiable),
+Failure protocol, Improvements noted, Decision log, Review evidence (cards
+>= 61), Closing commit stamp. `tests/test_backlog_contract.py` enforces this
 for upgraded pending cards.
 
 ## Spec And TDD

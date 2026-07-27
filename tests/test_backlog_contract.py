@@ -47,6 +47,38 @@ REQUIRED_HEADER_FIELDS = [
     "**State:**",
 ]
 
+# Cards from this id on must declare Risk tier and Decision log (card 110).
+ENFORCE_TIER_AND_LOG_FROM = 110
+
+CURSOR_AGENT_NAMES = (
+    "code-reviewer",
+    "test-auditor",
+    "simplicity-reviewer",
+    "docs-reviewer",
+    "security-reviewer",
+    "card-writer",
+    "implementation-agent",
+    "final-integrator",
+)
+
+CURSOR_RULE_NAMES = (
+    "00-backlog-session",
+    "01-docker-only",
+    "02-tdd-chips",
+    "03-definition-of-done",
+    "04-lucy-invariants",
+    "05-risk-tiers",
+    "06-planning-gate",
+    "07-anti-vibecoding",
+)
+
+WORKFLOW_FILES = (
+    "risk-tiers.md",
+    "final-review.md",
+    "implementation-log.md",
+    "closing-commit.md",
+)
+
 
 def pending_cards() -> list[Path]:
     return sorted((BACKLOG / "pending").glob("[0-9]*_*.md"))
@@ -253,3 +285,104 @@ def test_reviewed_states_require_substantive_review_evidence():
     assert not missing, (
         f"cards past the review gate lack substantive '## Review evidence': {missing}"
     )
+
+
+# -- risk tier + decision log (card 110) --------------------------------------
+
+
+def test_card_template_carries_risk_tier_and_decision_log():
+    template = (BACKLOG / "_TEMPLATE.md").read_text(encoding="utf-8")
+    assert "**Risk tier:**" in template
+    assert "## Decision log" in template
+    assert "## Closing commit" in template
+
+
+def test_pending_cards_from_110_declare_risk_tier_and_decision_log():
+    problems = []
+    for path in upgraded_cards():
+        if card_id(path) < ENFORCE_TIER_AND_LOG_FROM:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "**Risk tier:**" not in text:
+            problems.append(f"{path.name}: missing **Risk tier:**")
+        elif not re.search(r"\*\*Risk tier:\*\*\s*T[0-3]\b", text):
+            problems.append(f"{path.name}: Risk tier must be T0–T3")
+        if "## Decision log" not in text:
+            problems.append(f"{path.name}: missing ## Decision log")
+        else:
+            body = section(text, "## Decision log")
+            lines = [
+                line.strip()
+                for line in re.sub(r"<!--.*?-->", "", body, flags=re.S).splitlines()
+                if line.strip()
+            ]
+            has_entry = any(re.match(r"- \*\*D\d+", line) for line in lines)
+            has_empty = any(
+                line.startswith("No decisions: implementation followed the spec")
+                for line in lines
+            )
+            if not (has_entry or has_empty):
+                problems.append(
+                    f"{path.name}: Decision log needs D<n> entries or the "
+                    "explicit no-decisions line"
+                )
+    assert not problems, "\n".join(problems)
+
+
+# -- agent workflows + Cursor adapter (card 110) ------------------------------
+
+
+def test_agent_workflows_exist_with_lucy_signals():
+    workflows = ROOT / "docs" / "agents" / "workflows"
+    missing = [name for name in WORKFLOW_FILES if not (workflows / name).is_file()]
+    assert not missing, f"missing workflow files: {missing}"
+    risk = (workflows / "risk-tiers.md").read_text(encoding="utf-8")
+    assert "media-gateway" in risk
+    assert "plane boundary" in risk.lower() or "Plane boundary" in risk
+    closing = (workflows / "closing-commit.md").read_text(encoding="utf-8")
+    assert "do **not** auto-merge" in closing.lower() or "do not auto-merge" in closing.lower()
+    assert "honor-system" in closing
+
+
+def test_cursor_adapter_files_exist_without_foreign_model_ids():
+    agents_dir = ROOT / ".cursor" / "agents"
+    rules_dir = ROOT / ".cursor" / "rules"
+    skills_dir = ROOT / ".cursor" / "skills"
+    missing_agents = [
+        name for name in CURSOR_AGENT_NAMES if not (agents_dir / f"{name}.md").is_file()
+    ]
+    missing_rules = [
+        name for name in CURSOR_RULE_NAMES if not (rules_dir / f"{name}.mdc").is_file()
+    ]
+    missing_skills = [
+        name
+        for name in ("chip-tdd", "final-review", "closing-commit")
+        if not (skills_dir / name / "SKILL.md").is_file()
+    ]
+    assert not missing_agents, f"missing Cursor agents: {missing_agents}"
+    assert not missing_rules, f"missing Cursor rules: {missing_rules}"
+    assert not missing_skills, f"missing Cursor skills: {missing_skills}"
+
+    foreign = re.compile(r"\b(sonnet|haiku|gpt-5\.6-)\b")
+    offenders = []
+    for path in list(agents_dir.glob("*.md")) + list(rules_dir.glob("*.mdc")):
+        text = path.read_text(encoding="utf-8")
+        if foreign.search(text):
+            offenders.append(path.as_posix())
+    agents_md = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    cursor_section = section(agents_md, "## Cursor subagent model routing")
+    if not cursor_section:
+        # AGENTS.md uses the same content under agents.md title; find by marker
+        idx = agents_md.find("## Cursor subagent model routing")
+        assert idx >= 0, "AGENTS.md missing Cursor subagent model routing section"
+        cursor_section = agents_md[idx:]
+        next_h = re.search(r"\n## ", cursor_section[3:])
+        if next_h:
+            cursor_section = cursor_section[: next_h.start() + 3]
+    for needle in ("composer-2.5-fast", "cursor-grok-4.5-high-fast", "inherit"):
+        assert needle in cursor_section, f"Cursor routing missing {needle}"
+    # Foreign ids may still appear in the Codex section; Cursor section must not.
+    cursor_only = cursor_section
+    assert not re.search(r"\b(sonnet|haiku)\b", cursor_only)
+    assert "gpt-5.6-" not in cursor_only
+    assert not offenders, f"foreign model ids in Cursor adapter files: {offenders}"

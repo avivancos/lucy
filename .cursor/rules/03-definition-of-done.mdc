@@ -1,0 +1,12 @@
+---
+description: Definition of Done, Verification on finish, and BLOCKED semantics
+alwaysApply: true
+---
+
+# Definition of Done
+
+- Suite green in Docker; ruff/mypy clean when code changed; smoke or UI audit done.
+- Card bookkeeping: Improvements noted, follow-ups raised, Review evidence for cards >= 61.
+- A command not executed is `BLOCKED`, never assumed green.
+- Final review only after red→green, Decision log present, risk tier declared (`docs/agents/workflows/final-review.md`).
+- Closing commit uses explicit paths only; stamp `## Closing commit`. Do not push/merge to `main` unless the human asks.
