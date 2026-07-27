@@ -490,8 +490,8 @@ beats fake completion.
 
 ## Closing commit
 
-- Hash:  — docs: ship README quickstart and six public guides (card 49)
-- Branch:  · Files: 14 · Date: 2026-07-28
+- Hash: `df07b21` — docs: ship README quickstart and six public guides (card 49)
+- Branch: `cursor/cloud-agent-1785189837792-ncqxu` · Files: 14 · Date: 2026-07-28
 - Landed on main: pending human merge
 
 ## Pending human testing
