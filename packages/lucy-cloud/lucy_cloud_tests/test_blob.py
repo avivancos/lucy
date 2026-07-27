@@ -995,7 +995,7 @@ def test_fail_open_warning_never_logs_credentials_or_signed_urls(caplog) -> None
         ("blob_id", "api_key:super-secret"),
         ("session_id", "person@example.com"),
         ("session_id", "sess-34612345678"),
-        ("session_id", "Bearer secret-token"),
+        ("session_id", "Bearer " + "fixture-blob-session"),
         ("consent_ref", "owner@example.com"),
     ],
 )

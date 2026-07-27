@@ -1,3 +1,5 @@
+# Copyright 2026 Lucy contributors
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import base64
 
@@ -11,6 +13,15 @@ from lucy.transport.cpaas_smoke import (
     _run,
     place_cpaas_call,
 )
+from tests.test_secret_fixtures import (
+    synthetic_cpaas_api_key,
+    synthetic_cpaas_stream_token,
+    synthetic_twilio_auth_token,
+)
+
+_CPaaS_API_KEY = synthetic_cpaas_api_key()
+_CPaaS_STREAM_TOKEN = synthetic_cpaas_stream_token()
+_TWILIO_AUTH_TOKEN = synthetic_twilio_auth_token()
 
 
 @pytest.mark.asyncio
@@ -27,12 +38,12 @@ async def test_telnyx_smoke_uses_typed_stream_configuration_and_bearer_auth():
     settings = CpaasTransportSettings(
         provider="telnyx",
         account_id="connection-redacted",
-        api_key="secret-api-key",
+        api_key=_CPaaS_API_KEY,
         from_number="+34600000001",
         to_number="+34600000002",
         api_base_url="http://127.0.0.1",
         public_ws_url="wss://voice.example.test/cpaas/telnyx",
-        stream_auth_token="secret-stream-token",
+        stream_auth_token=_CPaaS_STREAM_TOKEN,
         allow_insecure_local=True,
     )
     async with httpx.AsyncClient(
@@ -42,7 +53,7 @@ async def test_telnyx_smoke_uses_typed_stream_configuration_and_bearer_auth():
 
     assert result.provider == "telnyx"
     assert result.accepted is True
-    assert seen["authorization"] == "Bearer secret-api-key"
+    assert seen["authorization"] == f"Bearer {_CPaaS_API_KEY}"
     assert seen["payload"] == {
         "connection_id": "connection-redacted",
         "to": "+34600000002",
@@ -52,9 +63,9 @@ async def test_telnyx_smoke_uses_typed_stream_configuration_and_bearer_auth():
         "stream_bidirectional_mode": "rtp",
         "stream_bidirectional_codec": "L16",
         "stream_bidirectional_sampling_rate": 16000,
-        "stream_auth_token": "secret-stream-token",
+        "stream_auth_token": _CPaaS_STREAM_TOKEN,
     }
-    assert "secret-api-key" not in repr(result)
+    assert _CPaaS_API_KEY not in repr(result)
 
 
 @pytest.mark.asyncio
@@ -71,7 +82,7 @@ async def test_twilio_smoke_uses_basic_auth_and_bidirectional_twiml():
     settings = CpaasTransportSettings(
         provider="twilio",
         account_id="ACREDACTED",
-        api_key="secret-auth-token",
+        api_key=_TWILIO_AUTH_TOKEN,
         from_number="+34600000001",
         to_number="+34600000002",
         api_base_url="http://127.0.0.1",
@@ -83,7 +94,9 @@ async def test_twilio_smoke_uses_basic_auth_and_bidirectional_twiml():
     ) as client:
         result = await place_cpaas_call(settings, client=client)
 
-    expected_auth = base64.b64encode(b"ACREDACTED:secret-auth-token").decode()
+    expected_auth = base64.b64encode(
+        f"ACREDACTED:{_TWILIO_AUTH_TOKEN}".encode()
+    ).decode()
     assert seen["authorization"] == f"Basic {expected_auth}"
     assert "To=%2B34600000002" in seen["form"]
     assert "From=%2B34600000001" in seen["form"]
@@ -94,7 +107,7 @@ async def test_twilio_smoke_uses_basic_auth_and_bidirectional_twiml():
 def test_smoke_settings_report_stream_and_live_call_requirements(monkeypatch):
     monkeypatch.setenv("LUCY_CPAAAS_PROVIDER", "telnyx")
     monkeypatch.setenv("LUCY_CPAAAS_ACCOUNT_ID", "connection-redacted")
-    monkeypatch.setenv("LUCY_CPAAAS_API_KEY", "secret")
+    monkeypatch.setenv("LUCY_CPAAAS_API_KEY", "fixture-cpaas-credential")
     monkeypatch.setenv("LUCY_CPAAAS_FROM_NUMBER", "+34600000001")
     monkeypatch.setenv("LUCY_CPAAAS_TO_NUMBER", "+34600000002")
 
@@ -113,12 +126,12 @@ async def test_smoke_rejects_non_https_provider_endpoint_outside_localhost():
     settings = CpaasTransportSettings(
         provider="telnyx",
         account_id="connection-redacted",
-        api_key="secret",
+        api_key="fixture-cpaas-credential",
         from_number="+34600000001",
         to_number="+34600000002",
         api_base_url="http://api.example.test",
         public_ws_url="wss://voice.example.test/cpaas/telnyx",
-        stream_auth_token="secret-stream-token",
+        stream_auth_token=_CPaaS_STREAM_TOKEN,
     )
 
     with pytest.raises(ValueError, match="HTTPS"):
@@ -158,18 +171,18 @@ async def test_smoke_reports_provider_http_failures_without_response_or_secrets(
     async def dial():
         return Response(
             status_code=status_code,
-            content=b"secret-api-key +34600000001 provider-body",
+            content=b"fixture-credential +34600000001 provider-body",
         )
 
     settings = CpaasTransportSettings(
         provider="telnyx",
         account_id="connection-redacted",
-        api_key="secret-api-key",
+        api_key=_CPaaS_API_KEY,
         from_number="+34600000001",
         to_number="+34600000002",
         api_base_url="http://127.0.0.1",
         public_ws_url="wss://voice.example.test/cpaas/telnyx",
-        stream_auth_token="secret-stream-token",
+        stream_auth_token=_CPaaS_STREAM_TOKEN,
         allow_insecure_local=True,
     )
     async with httpx.AsyncClient(
@@ -195,12 +208,12 @@ async def test_smoke_rejects_oversized_provider_response():
     settings = CpaasTransportSettings(
         provider="telnyx",
         account_id="connection-redacted",
-        api_key="secret-api-key",
+        api_key=_CPaaS_API_KEY,
         from_number="+34600000001",
         to_number="+34600000002",
         api_base_url="http://127.0.0.1",
         public_ws_url="wss://voice.example.test/cpaas/telnyx",
-        stream_auth_token="secret-stream-token",
+        stream_auth_token=_CPaaS_STREAM_TOKEN,
         allow_insecure_local=True,
     )
     async with httpx.AsyncClient(
@@ -226,12 +239,12 @@ async def test_smoke_read_timeout_is_bounded_by_typed_setting():
     settings = CpaasTransportSettings(
         provider="telnyx",
         account_id="connection-redacted",
-        api_key="secret-api-key",
+        api_key=_CPaaS_API_KEY,
         from_number="+34600000001",
         to_number="+34600000002",
         api_base_url=f"http://127.0.0.1:{port}",
         public_ws_url="wss://voice.example.test/cpaas/telnyx",
-        stream_auth_token="secret-stream-token",
+        stream_auth_token=_CPaaS_STREAM_TOKEN,
         allow_insecure_local=True,
         request_timeout_seconds=0.01,
     )

@@ -53,7 +53,9 @@ The profile is never started by the default `docker compose up` command.
 ## Register a softphone
 
 The safe local defaults are listed in `.env.example`. Override them in the
-gitignored `.env` file when needed.
+gitignored `.env` file when needed. For passwords, you may keep the documented
+lab defaults on localhost only or generate fresh values with
+`openssl rand -hex 16`.
 
 | Setting | Local default |
 | --- | --- |
@@ -61,7 +63,7 @@ gitignored `.env` file when needed.
 | Transport | UDP |
 | Port | `15060` |
 | User | `lucy-lab` |
-| Password | `lucy-lab-only` |
+| Password | value of `LUCY_TELEPHONY_PJSIP_PASSWORD` in `.env` (see `.env.example`) |
 
 Register the account, then dial `lab-check` to hear the same checked-in WAV.
 Dial `lucy-audiosocket` to exercise the live media-fork route. The RTP range is
