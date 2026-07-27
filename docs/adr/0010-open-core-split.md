@@ -28,8 +28,9 @@ Open (SDK, Apache-2.0 license, public repo):
   subpackage so the no-mocks policy (ADR 0003) extends to plugin authors.
 - `lucy.serve`: the framework serving runtime (health, realtime SSE, session
   control channel) plus a deliberately minimal local trace viewer.
-- The Rust media gateway (ADR 0004) and, later, provider plugins and the
-  `lucy-cloud` telemetry client (open client, closed server).
+- The Rust media gateway (ADR 0004).
+- Provider plugins and the `lucy-cloud` telemetry client ship as open
+  packages under `packages/` (open client, closed server).
 
 Closed (platform, private repo):
 

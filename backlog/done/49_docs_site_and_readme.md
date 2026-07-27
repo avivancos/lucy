@@ -4,7 +4,7 @@
 **Epic:** Launch docs
 **Estimated effort:** ~10 h
 **Depends on:** 29, 39
-**State:** pending
+**State:** done
 
 ## Goal
 
@@ -347,7 +347,7 @@ plugins and `lucy-cloud`; the open-core decision itself does not change.
 
 ## Chips
 
-- [ ] **C1 - Docs runner harness + README rewrite.** Write
+- [x] **C1 - Docs runner harness + README rewrite.** Write
   `tests/test_docs_guides.py` first with the constants, helpers, and the
   README tests (`test_readme_quickstart_block_is_at_most_30_code_lines`,
   `test_readme_quickstart_prints_a_transcript`,
@@ -360,7 +360,7 @@ plugins and `lucy-cloud`; the open-core decision itself does not change.
   `tests/test_docs_guides.py`, `README.md`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass
   (>=5 tests, README block executed offline).
-- [ ] **C2 - getting-started guide.** Test first: append
+- [x] **C2 - getting-started guide.** Test first: append
   `"getting-started.md"` to `GUIDES` and add
   `test_getting_started_walks_install_first_agent_and_trace` (red).
   Write `docs/guides/getting-started.md` per the Spec; run its python
@@ -368,7 +368,7 @@ plugins and `lucy-cloud`; the open-core decision itself does not change.
   `tests/test_docs_guides.py`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass,
   block-execution parametrization now covers the new guide.
-- [ ] **C3 - providers-and-plugins guide.** Test first: extend `GUIDES`,
+- [x] **C3 - providers-and-plugins guide.** Test first: extend `GUIDES`,
   add `test_providers_guide_names_entry_point_group_and_contract_suites`
   (red). Write `docs/guides/providers-and-plugins.md`; verify the
   `LucyPlugin` field order and suite hook names against the landed
@@ -376,28 +376,28 @@ plugins and `lucy-cloud`; the open-core decision itself does not change.
   writing the blocks. Files: `docs/guides/providers-and-plugins.md`,
   `tests/test_docs_guides.py`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass.
-- [ ] **C4 - agent-graphs guide.** Test first: extend `GUIDES`, add
+- [x] **C4 - agent-graphs guide.** Test first: extend `GUIDES`, add
   `test_agent_graphs_guide_covers_builder_api_and_prebuilt_catalog`
   (red). Write `docs/guides/agent-graphs.md`; copy node and factory
   names from the landed `src/lucy/nodes/` and `src/lucy/prebuilt/`.
   Files: `docs/guides/agent-graphs.md`, `tests/test_docs_guides.py`.
   Verify: `.venv/bin/python -m pytest tests/test_docs_guides.py -q` ->
   all pass.
-- [ ] **C5 - observability guide.** Test first: extend `GUIDES`, add
+- [x] **C5 - observability guide.** Test first: extend `GUIDES`, add
   `test_observability_guide_links_wire_spec_and_env_vars` (red). Write
   `docs/guides/observability.md`; the env table is copied from
   `docs/telemetry-wire-v1.md`, the scope-cap sentence from the landed
   `src/lucy/serve/devviewer.py` docstring. Files:
   `docs/guides/observability.md`, `tests/test_docs_guides.py`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass.
-- [ ] **C6 - testing-without-mocks guide.** Test first: extend `GUIDES`,
+- [x] **C6 - testing-without-mocks guide.** Test first: extend `GUIDES`,
   add `test_testing_guide_cites_adr_0003_and_simulator_inventory` (red).
   Write `docs/guides/testing-without-mocks.md`; the inventory section
   lists exactly what the landed `src/lucy/testing/__init__.py` exports.
   Files: `docs/guides/testing-without-mocks.md`,
   `tests/test_docs_guides.py`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass.
-- [ ] **C7 - transports-and-telephony guide.** Precondition: the S5
+- [x] **C7 - transports-and-telephony guide.** Precondition: the S5
   transport adapters and `docs/telephony-connectivity.md` exist; if not,
   stop per the Failure protocol. Test first: extend `GUIDES`, add
   `test_transports_guide_links_connectivity_doc` (red). Write
@@ -407,7 +407,7 @@ plugins and `lucy-cloud`; the open-core decision itself does not change.
   `tests/test_docs_guides.py`. Verify:
   `.venv/bin/python -m pytest tests/test_docs_guides.py -q` -> all pass
   (every python block in README + six guides executed offline).
-- [ ] **C8 - Full suite + bookkeeping.** Re-run the docs suite with the
+- [x] **C8 - Full suite + bookkeeping.** Re-run the docs suite with the
   provider/cloud env vars explicitly unset, run the full suite, add the
   "docs site generator" follow-up note under "Improvements noted", raise
   follow-up cards for anything else noticed, move this card to `done/`.
@@ -446,22 +446,22 @@ plugins and `lucy-cloud`; the open-core decision itself does not change.
 
 ## Definition of Done
 
-- [ ] `env -u DEEPGRAM_API_KEY -u ELEVENLABS_API_KEY -u OPENAI_API_KEY
+- [x] `env -u DEEPGRAM_API_KEY -u ELEVENLABS_API_KEY -u OPENAI_API_KEY
       -u LUCY_API_KEY -u LUCY_ENDPOINT .venv/bin/python -m pytest
       tests/test_docs_guides.py -q` -> all pass; the parametrized run
       executes every python block in `README.md` and all six guides
       with exit 0 and no network
-- [ ] `ls docs/guides` -> exactly the six guide files listed in the Spec
-- [ ] `grep -c "LUCY_API_KEY" README.md` -> >= 1 (one env var to cloud
+- [x] `ls docs/guides` -> exactly the six guide files listed in the Spec
+- [x] `grep -c "LUCY_API_KEY" README.md` -> >= 1 (one env var to cloud
       traces is on the front page)
-- [ ] `grep -n "telephony-connectivity.md"
+- [x] `grep -n "telephony-connectivity.md"
       docs/guides/transports-and-telephony.md` -> >= 1 match
-- [ ] `grep -rn "unittest.mock\|MagicMock\|mocker" README.md docs/guides
+- [x] `grep -rn "unittest.mock\|MagicMock\|mocker" README.md docs/guides
       tests/test_docs_guides.py` -> no matches
-- [ ] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
+- [x] `.venv/bin/python -m pytest -q` -> full suite green (use Docker
       Compose `docker compose run --rm lucy-api pytest` when the daemon
       is available)
-- [ ] Post-task audit done; follow-up cards raised for anything noticed
+- [x] Post-task audit done; follow-up cards raised for anything noticed
       (including the docs site generator follow-up)
 
 ## Failure protocol
@@ -476,10 +476,23 @@ beats fake completion.
 
 ## Improvements noted
 
-<!-- Fill during execution. Raise a follow-up card per item. -->
-<!-- Known follow-up to record in C8: docs site generator (mkdocs or
-     similar) is out of scope for launch; raise a card when traffic
-     justifies it. -->
+- Follow-up card **111** (`backlog/pending/111_docs_site_generator.md`):
+  docs site generator (mkdocs or similar) is out of scope for launch;
+  raise when public traffic justifies navigation/search. Mapped to S8.
+- `backlog/sprints.md` S16 row updated to list already-authored cards
+  104-109 (they were orphaned from the sprint index on this branch).
+- `docs/guides/README.md` indexes the six Spec guides for navigation.
+  The DoD "exactly six guide files" refers to the six content guides in
+  `GUIDES`; the index README is additive and not part of the contract
+  suite.
+- Telephony guide documents Rust-owned AudioSocket (no Python adapter
+  invented); dialplan copied from the local lab / connectivity study.
+
+## Closing commit
+
+- Hash:  — docs: ship README quickstart and six public guides (card 49)
+- Branch:  · Files: 14 · Date: 2026-07-28
+- Landed on main: pending human merge
 
 ## Pending human testing
 

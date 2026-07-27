@@ -15,7 +15,7 @@ order unless the dependency notes say a sprint can start early.
 | S5 Native telephony | Telephony | 97, 40, 41, 42, 43, 44, 45, 100, 101, 102 | Real call softphone -> Asterisk -> Lucy locally; real PSTN call via CPaaS with a Spanish DID |
 | S6 Provider ecosystem | Providers | 28, 29, 38, 51, 68 | Quickstart with real provider spec strings; same eval suite green on cascaded and realtime drivers; routed LLM fallback spans are observable |
 | S7 Cloud observability seam | Platform | 30, 47*, 48*, 72, 73 | `LUCY_API_KEY` end-to-end: same script, console -> cloud -> dashboard; run identity, tags, and blob presign are wired |
-| S8 Launch | Launch | 46, 49, 50, 93 | Public repo installable: `pip install` + quickstart from scratch on a clean machine; launch-base hygiene removed stale API shims |
+| S8 Launch | Launch | 46, 49, 50, 93, 111 | Public repo installable: `pip install` + quickstart from scratch on a clean machine; launch-base hygiene removed stale API shims |
 | S9 Analytics & SRE observability | Platform/Runtime | 52, 54, 55, 56, 57, 66, 67, 94, 98, 99, 103 | Local run serves an analytics-model-v1 rollup at `/analytics`, Grafana renders RED/USE metrics, and the SDK emits full voice costs, talk-time attribution, provider/RAG attribution, and local budget enforcement |
 | S10 Agent operations | Process | 61, 62, 63, 65, 110 | CLAUDE.md auto-loads the operating contract; a card moves to done only with recorded reviewer verdicts; the contract test goes red on missing Review evidence; ruff/mypy run in the sanctioned Docker image; clean API builds keep the Docker context lean; Cursor adapters and hardened Spec/TDD workflows from agents-specs are wired |
 | S11 Platform feed (SDK) | Runtime/Observability | 69, 70, 71 | A simulated call records dual-leg WAVs through LocalGatewaySimulator to a local blob server; `audio_ref` + `cost` + tagged events land in JSONL; the session resumes from Postgres after a process restart |
@@ -82,9 +82,9 @@ for SDK card 73.
 - S16 is the bounded open media-plane contribution for the platform call
   cockpit. It changes internal Rust drivers and the versioned gateway control
   schema only; it does not change the public provider/spec ABI or telemetry
-  wire v1. Run 104 -> 105 -> 106/107, with card 108 additionally gated by card
-  45's WebRTC dependency verdict. Card 109 requires card 101 and the matching
-  platform cockpit certification.
+  wire v1. Cards 104-109 are authored under S16. Planned order: 104 -> 105 ->
+  106/107, with 108 gated by card 45's WebRTC verdict and 109 by card 101 +
+  platform cockpit. Card 111 is the S8 docs-site-generator follow-up from 49.
 
 ## Sprint field convention
 
