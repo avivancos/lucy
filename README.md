@@ -1,5 +1,3 @@
-# Lucy
-
 Lucy is a Python-first framework and platform foundation for production voice
 agents. It is designed around ultra-low-latency voice pipelines, MCP-first
 integrations, CRM-ready metrics, synthetic evaluations, and an operations-grade
